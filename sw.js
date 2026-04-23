@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v2';
+const CACHE_NAME = 'little-linguist-v3';
 
 const CDN_ASSETS = [
   'https://cdn.tailwindcss.com',
@@ -8,30 +8,23 @@ const CDN_ASSETS = [
   'https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js',
 ];
 
-const APP_SHELL = [
-  '/Gungbe-Yor/',
-  '/Gungbe-Yor/index.html',
-  '/Gungbe-Yor/manifest.json',
-  '/Gungbe-Yor/icons/icon-192.png',
-  '/Gungbe-Yor/icons/icon-512.png',
-];
-
+// Install: only cache CDN assets, not local files (avoids path issues)
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(async (cache) => {
-      await cache.addAll(APP_SHELL);
-      await Promise.allSettled(
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.allSettled(
         CDN_ASSETS.map((url) =>
           fetch(url, { mode: 'cors' })
             .then((res) => { if (res.ok) cache.put(url, res); })
             .catch(() => {})
         )
-      );
-    })
+      )
+    )
   );
   self.skipWaiting();
 });
 
+// Activate: clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -43,39 +36,35 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Fetch: cache-first for CDN, network-first for everything else
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  const url = request.url;
+  const url = event.request.url;
 
-  const isCdnAsset = CDN_ASSETS.some((cdn) => url.startsWith(cdn));
-  if (isCdnAsset) {
+  const isCdn = CDN_ASSETS.some((cdn) => url.startsWith(cdn));
+  if (isCdn) {
     event.respondWith(
-      caches.match(request).then(
-        (cached) =>
-          cached ||
-          fetch(request).then((res) => {
-            if (res.ok) {
-              const clone = res.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-            }
-            return res;
-          })
+      caches.match(event.request).then(
+        (cached) => cached || fetch(event.request).then((res) => {
+          if (res.ok) {
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, res.clone()));
+          }
+          return res;
+        })
       )
     );
     return;
   }
 
-  if (request.method === 'GET' && url.startsWith(self.location.origin)) {
+  if (event.request.method === 'GET' && url.startsWith(self.location.origin)) {
     event.respondWith(
-      fetch(request)
+      fetch(event.request)
         .then((res) => {
           if (res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, res.clone()));
           }
           return res;
         })
-        .catch(() => caches.match(request))
+        .catch(() => caches.match(event.request))
     );
   }
 });
