@@ -2,7 +2,8 @@
   "name": "Little Linguist - Fun Learning",
   "short_name": "Little Linguist",
   "description": "Learn Yoruba and Gungbe with flashcards and quizzes",
-  "start_url": ".",
+  "start_url": "/Gungbe-Yor/",
+  "scope": "/Gungbe-Yor/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#eff6ff",
@@ -11,16 +12,28 @@
   "categories": ["education", "kids"],
   "icons": [
     {
-      "src": "icons/icon-192.png",
+      "src": "/Gungbe-Yor/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
-      "src": "icons/icon-512.png",
+      "src": "/Gungbe-Yor/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/Gungbe-Yor/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/Gungbe-Yor/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
