@@ -917,9 +917,17 @@
             const [view, setView] = useState('menu');
             const [category, setCategory] = useState(null);
             const [lang, setLang] = useState('yoruba');
+            const [audioKeys, setAudioKeys] = useState(new Set());
 
-            // Only show words that have a recorded native audio clip for the selected language
-            const wordsWithAudio = words.filter(w => audioCache[w.id + '_' + lang]);
+            // Load all stored audio keys from IndexedDB on mount and when lang changes
+            useEffect(() => {
+                getAllAudioEntries().then(entries => {
+                    setAudioKeys(new Set(Object.keys(entries)));
+                }).catch(() => {});
+            }, [lang, words]);
+
+            // Show words that have a native audio clip in IndexedDB for the selected language
+            const wordsWithAudio = words.filter(w => audioKeys.has(w.id + '_' + lang));
 
             if (view === 'menu') {
                 return (
