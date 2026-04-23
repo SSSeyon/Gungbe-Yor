@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Little Linguist - Fun Learning</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#2563eb">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Little Linguist">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Canvas Confetti for rewards -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        /* 3D Flip Effects */
+        .perspective-1000 { perspective: 1000px; }
+        .transform-style-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+        .rotate-y-180 { transform: rotateY(180deg); }
+        
+        /* Custom Animations */
+        @keyframes float {
+            0% { transform: translateY(0px) rotate(0deg); opacity: 0.6; }
+            50% { transform: translateY(-20px) rotate(5deg); opacity: 0.8; }
+            100% { transform: translateY(0px) rotate(0deg); opacity: 0.6; }
+        }
+        .animate-float { animation: float 6s ease-in-out infinite; }
+        
+        @keyframes bounce-slow {
+            0%, 100% { transform: translateY(-5%); }
+            50% { transform: translateY(0); }
+        }
+        .animate-bounce-slow { animation: bounce-slow 2s infinite; }
+
+        @keyframes popIn {
+            0% { transform: scale(0); opacity: 0; }
+            80% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        @keyframes wave {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(20deg); }
+        }
+        .animate-wave-hand { 
+            animation: wave 1.2s ease-in-out infinite; 
+            transform-box: fill-box; /* Helps with SVG transforms */
+        }
+
+        /* Floating Background Icons */
+        .bg-icon {
+            position: absolute;
+            z-index: 0;
+            pointer-events: none;
+            opacity: 0.1;
+            animation: float 10s infinite ease-in-out;
+        }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* Wrong answer feedback */
+        @keyframes shake {
+            0%   { transform: translateX(0); }
+            15%  { transform: translateX(-8px) rotate(-2deg); }
+            30%  { transform: translateX(8px) rotate(2deg); }
+            45%  { transform: translateX(-6px) rotate(-1deg); }
+            60%  { transform: translateX(6px) rotate(1deg); }
+            75%  { transform: translateX(-3px); }
+            100% { transform: translateX(0); }
+        }
+        .animate-shake { animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both; }
+        .answer-wrong {
+            background-color: #fee2e2 !important;
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 0 4px rgba(239,68,68,0.25) !important;
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-yellow-200 selection:text-yellow-900 overflow-y-auto">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- THEME CONFIGURATION ---
+        const THEMES = {
+            boy: {
+                id: 'boy',
+                name: 'Adventure Explorer',
+                kidIcon: 'KidBoy',
+                bgGradient: 'bg-gradient-to-br from-sky-100 via-blue-50 to-indigo-100',
+                primary: 'bg-blue-600',
+                primaryHover: 'hover:bg-blue-700',
+                secondary: 'bg-orange-500',
+                secondaryHover: 'hover:bg-orange-600',
+                accentText: 'text-blue-600',
+                cardBorder: 'border-blue-200',
+                quizOptionBorder: 'border-indigo-200',
+                bgIcons: ['🚀', '🦕', '⚽', '🏎️', '🪐', '🎮', '👾', '⚓', '🚲', '🚁', '⛺', '🦖', '🤖', '🛹', '🗺️', '🦁'],
+                buttonClass: 'bg-gradient-to-b from-blue-400 to-blue-600 shadow-[0_4px_0_rgb(30,58,138)] active:shadow-none active:translate-y-[4px]'
+            },
+            girl: {
+                id: 'girl',
+                name: 'Magical World',
+                kidIcon: 'KidGirl',
+                bgGradient: 'bg-gradient-to-br from-pink-100 via-purple-50 to-rose-100',
+                primary: 'bg-pink-500',
+                primaryHover: 'hover:bg-pink-600',
+                secondary: 'bg-purple-500',
+                secondaryHover: 'hover:bg-purple-600',
+                accentText: 'text-pink-600',
+                cardBorder: 'border-pink-200',
+                quizOptionBorder: 'border-purple-200',
+                bgIcons: ['🦄', '👑', '🌈', '🦋', '🍭', '💖', '🧚‍♀️', '🏰', '🧜‍♀️', '🎀', '🌸', '🧁', '🎠', '✨', '💎', '🩰'],
+                buttonClass: 'bg-gradient-to-b from-pink-400 to-pink-600 shadow-[0_4px_0_rgb(157,23,77)] active:shadow-none active:translate-y-[4px]'
+            }
+        };
+
+        // --- CONSTANTS ---
+        const STICKERS_DATA = [
+            { id: 'first_win', name: 'First Win', icon: '🌟', desc: 'Get your first correct answer', criteria: (stats) => stats.correct >= 1 },
+            { id: 'quiz_master', name: 'Quiz Master', icon: '🎓', desc: 'Get 10 correct answers', criteria: (stats) => stats.correct >= 10 },
+            { id: 'animal_expert', name: 'Animal Expert', icon: '🦁', desc: 'Master 5 Animal words', criteria: (stats) => (stats.categories['Animals'] || 0) >= 5 },
+            { id: 'super_star', name: 'Super Star', icon: '🏆', desc: 'Get 50 correct answers', criteria: (stats) => stats.correct >= 50 },
+            { id: 'explorer', name: 'Explorer', icon: '🧭', desc: 'Try 3 different categories', criteria: (stats) => Object.keys(stats.categories || {}).length >= 3 },
+            { id: 'foodie', name: 'Foodie', icon: '🍎', desc: 'Master 5 Food words', criteria: (stats) => (stats.categories['Food'] || 0) >= 5 },
+        ];
+
+        // --- ICONS ---
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const icons = {
+                KidBoy: (
+                    <div className={className} style={{ width: size, height: size, position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                         {/* Head: Using HTML text for reliable Emoji rendering */}
+                        <div style={{ fontSize: size * 0.75, lineHeight: 1, zIndex: 2, marginBottom: -size * 0.25, filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.1))' }}>
+                            👦🏾
+                        </div>
+                         {/* Body: Simple SVG attached below */}
+                        <svg width={size * 0.9} height={size * 0.5} viewBox="0 0 100 60" style={{ zIndex: 1, overflow: 'visible' }}>
+                            {/* Shirt */}
+                            <path d="M25 15 Q50 5 75 15 L82 60 L18 60 Z" fill="#3B82F6" stroke="#2563EB" strokeWidth="2" />
+                            {/* Arms */}
+                            <path d="M25 20 L10 50" stroke="#3B82F6" strokeWidth="8" strokeLinecap="round" />
+                            <path d="M75 20 L90 50" stroke="#3B82F6" strokeWidth="8" strokeLinecap="round" />
+                        </svg>
+                    </div>
+                ),
+                KidGirl: (
+                    <div className={className} style={{ width: size, height: size, position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                         {/* Head */}
+                        <div style={{ fontSize: size * 0.75, lineHeight: 1, zIndex: 2, marginBottom: -size * 0.25, filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.1))' }}>
+                            👧🏾
+                        </div>
+                         {/* Body */}
+                        <svg width={size * 0.9} height={size * 0.5} viewBox="0 0 100 60" style={{ zIndex: 1, overflow: 'visible' }}>
+                             {/* Dress */}
+                             <path d="M28 15 Q50 5 72 15 L85 60 Q50 65 15 60 Z" fill="#EC4899" stroke="#DB2777" strokeWidth="2" />
+                             {/* Arms */}
+                            <path d="M28 20 L15 50" stroke="#EC4899" strokeWidth="8" strokeLinecap="round" />
+                            <path d="M72 20 L85 50" stroke="#EC4899" strokeWidth="8" strokeLinecap="round" />
+                        </svg>
+                    </div>
+                ),
+                Mic: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>,
+                Square: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="18" height="18" x="3" y="3" rx="2" /></svg>,
+                Play: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polygon points="6 3 20 12 6 21 6 3"/></svg>,
+                Plus: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M5 12h14"/><path d="M12 5v14"/></svg>,
+                Trash2: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>,
+                Settings: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>,
+                X: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>,
+                Check: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polyline points="20 6 9 17 4 12"/></svg>,
+                Volume2: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>,
+                Award: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>,
+                Home: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+                Search: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>,
+                Download: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>,
+                Upload: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>,
+                RotateCcw: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>,
+                FileJson: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M10 12h.01"/><path d="M14 12h.01"/><path d="M10 16h.01"/><path d="M14 16h.01"/></svg>,
+                Palette: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>,
+                Edit: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>,
+                BarChart: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+                Save: <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            };
+            return icons[name] || null;
+        };
+
+        // --- INDEXEDDB HELPER ---
+        const DB_NAME = 'LittleLinguistDB';
+        const STORE_NAME = 'audio_files';
+        const DB_VERSION = 1;
+
+        const initDB = () => {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = (event) => reject(event.target.error);
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
+                };
+                request.onsuccess = (event) => resolve(event.target.result);
+            });
+        };
+
+        const saveAudioBlob = async (id, blob) => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.put(blob, id);
+                request.onsuccess = () => resolve();
+                request.onerror = (e) => reject(e);
+            });
+        };
+
+        const getAudioBlob = async (id) => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.get(id);
+                request.onsuccess = (event) => resolve(event.target.result);
+                request.onerror = (e) => reject(e);
+            });
+        };
+
+        const getAllAudioEntries = async () => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction([STORE_NAME], 'readonly');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.getAllKeys();
+                request.onsuccess = async () => {
+                    const keys = request.result;
+                    if (keys.length === 0) resolve({});
+                    const entries = {};
+                    let processed = 0;
+                    for (const key of keys) {
+                        const blobReq = store.get(key);
+                        blobReq.onsuccess = (e) => {
+                            entries[key] = e.target.result;
+                            processed++;
+                            if (processed === keys.length) resolve(entries);
+                        }
+                    }
+                };
+                request.onerror = reject;
+            });
+        };
+
+        const blobToBase64 = (blob) => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        };
+
+        const base64ToBlob = async (base64Data) => {
+          const res = await fetch(base64Data);
+          return await res.blob();
+        };
+
+        // --- INITIAL DATA ---
+        const INITIAL_DATA = [
+            { id: '1', category: 'Animals', english: 'Dog', yoruba: 'Ajá', gungbe: 'Ovun', icon: '🐶' },
+            { id: '2', category: 'Animals', english: 'Cat', yoruba: 'Ológbò', gungbe: 'Ase', icon: '🐱' },
+            { id: '3', category: 'Animals', english: 'Cow', yoruba: 'Malúù', gungbe: 'Eni', icon: '🐮' },
+            { id: '56', category: 'Food', english: 'Apple', yoruba: 'Àpù', gungbe: 'Apu', icon: '🍎' },
+            { id: '57', category: 'Food', english: 'Banana', yoruba: 'Ọ̀gẹ̀dẹ̀', gungbe: 'Kókóe', icon: '🍌' },
+            { id: '265', category: 'Colors', english: 'Red', yoruba: 'Pupa', gungbe: 'Fefe', icon: '🔴' },
+            { id: '266', category: 'Colors', english: 'Blue', yoruba: 'Àwọ̀ oju orun', gungbe: 'Juju', icon: '🔵' },
+        ];
+
+        const CATEGORIES = ['Animals', 'Food', 'Daily', 'Clothing', 'Colors', 'Numbers', 'Greetings'];
+
+        // --- COMPONENTS ---
+
+        const Background = ({ theme }) => (
+            <div className={`fixed inset-0 z-[-1] ${theme.bgGradient} transition-colors duration-1000 overflow-hidden`}>
+                 {theme.bgIcons.map((icon, i) => (
+                     <div key={i} className="bg-icon text-4xl" style={{top: `${Math.random()*100}%`, left: `${Math.random()*100}%`, animationDelay: `${Math.random()*5}s`, fontSize: `${Math.random()*2+1}rem`}}>{icon}</div>
+                 ))}
+            </div>
+        );
+
+        const App = () => {
+            const [mode, setMode] = useState('landing');
+            const [words, setWords] = useState([]);
+            const [audioCache, setAudioCache] = useState({});
+            const [currentTheme, setCurrentTheme] = useState('boy');
+            
+            // New States
+            const [stickers, setStickers] = useState([]);
+            const [stats, setStats] = useState({ correct: 0, incorrect: 0, categories: {} });
+            const [settings, setSettings] = useState({ autoPlayAudio: true, flashcardFront: 'english' });
+
+            useEffect(() => {
+                const savedTheme = localStorage.getItem('littleLinguistTheme');
+                if (savedTheme && THEMES[savedTheme]) setCurrentTheme(savedTheme);
+                
+                const savedWords = localStorage.getItem('littleLinguistWords_v3');
+                if (savedWords) setWords(JSON.parse(savedWords));
+                else { setWords(INITIAL_DATA); localStorage.setItem('littleLinguistWords_v3', JSON.stringify(INITIAL_DATA)); }
+
+                const savedStickers = localStorage.getItem('ll_stickers');
+                if(savedStickers) setStickers(JSON.parse(savedStickers));
+
+                const savedStats = localStorage.getItem('ll_stats');
+                if(savedStats) setStats(JSON.parse(savedStats));
+
+                const savedSettings = localStorage.getItem('ll_settings');
+                if(savedSettings) {
+                    // Merge saved settings with defaults to handle new keys like 'flashcardFront'
+                    setSettings({ autoPlayAudio: true, flashcardFront: 'english', ...JSON.parse(savedSettings) });
+                }
+            }, []);
+
+            useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
+            useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
+            useEffect(() => localStorage.setItem('ll_stickers', JSON.stringify(stickers)), [stickers]);
+            useEffect(() => localStorage.setItem('ll_stats', JSON.stringify(stats)), [stats]);
+            useEffect(() => localStorage.setItem('ll_settings', JSON.stringify(settings)), [settings]);
+
+            const changeTheme = (themeId) => setCurrentTheme(themeId);
+            const theme = THEMES[currentTheme];
+
+            const handleAudioPlay = async (wordId, lang) => {
+                const audioKey = `${wordId}_${lang}`;
+                if (audioCache[audioKey]) {
+                    new Audio(audioCache[audioKey]).play().catch(e => console.log(e));
+                    return;
+                }
+                try {
+                    const blob = await getAudioBlob(audioKey);
+                    if (blob) {
+                        const url = URL.createObjectURL(blob);
+                        setAudioCache(prev => ({ ...prev, [audioKey]: url }));
+                        new Audio(url).play().catch(e => console.log(e));
+                    } else if ('speechSynthesis' in window && lang === 'english') {
+                         // Fallback for English
+                         const u = new SpeechSynthesisUtterance(words.find(w=>w.id===wordId)?.english || "");
+                         window.speechSynthesis.speak(u);
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+            const clearAudioCache = (wordId, lang) => {
+                const audioKey = `${wordId}_${lang}`;
+                setAudioCache(prev => {
+                    const newState = { ...prev };
+                    delete newState[audioKey];
+                    return newState;
+                });
+            };
+
+            const updateStats = (isCorrect, category) => {
+                setStats(prev => {
+                    const newStats = { ...prev };
+                    if(isCorrect) {
+                        newStats.correct++;
+                        newStats.categories[category] = (newStats.categories[category] || 0) + 1;
+                    } else { newStats.incorrect++; }
+                    return newStats;
+                });
+            };
+
+            return (
+                <div className="min-h-screen relative font-sans text-gray-800">
+                    <Background theme={theme} />
+                    <div className={`${theme.primary} text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center transition-colors duration-500`}>
+                        <div className="flex items-center gap-2 font-bold text-xl"><span>🌍 Little Linguist</span></div>
+                        {mode !== 'landing' && (
+                             <button onClick={() => setMode('landing')} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-bold flex items-center gap-2 transition-all">
+                               <Icon name="Home" size={16} /> Home
+                             </button>
+                        )}
+                    </div>
+                    <div className="relative z-10 pb-20">
+                        {mode === 'landing' && <Landing setMode={setMode} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} />}
+                        {mode === 'kid_dashboard' && <KidZone words={words} playAudio={handleAudioPlay} setMode={setMode} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
+                    </div>
+                </div>
+            );
+        };
+
+        const Landing = ({ setMode, theme, changeTheme, currentTheme, stickers }) => {
+            const [challenge, setChallenge] = useState(null);
+            const [answer, setAnswer] = useState('');
+            const startChallenge = () => {
+                const n1 = Math.floor(Math.random() * 5) + 1;
+                const n2 = Math.floor(Math.random() * 4) + 1;
+                setChallenge({ q: `${n1} + ${n2}`, a: (n1 + n2).toString() });
+                setAnswer('');
+            };
+            const verify = () => {
+                if (answer.trim() === challenge.a) { setChallenge(null); setMode('parent'); } 
+                else { alert("Oops! Try again."); setAnswer(''); }
+            };
+
+            return (
+                <div className="flex flex-col items-center justify-center min-h-[80vh] p-4 gap-8 relative">
+                    {challenge && (
+                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/60 backdrop-blur-sm rounded-3xl animate-pop">
+                            <div className="bg-white p-8 rounded-3xl shadow-2xl border-4 border-gray-100 w-full max-w-xs text-center">
+                                <div className="text-4xl mb-4">🔒</div>
+                                <h3 className="text-xl font-bold text-gray-800 mb-2">Parents Only</h3>
+                                <p className="text-gray-500 mb-6 font-medium">What is {challenge.q}?</p>
+                                <input 
+                                    type="number" 
+                                    value={answer} 
+                                    onChange={e => setAnswer(e.target.value)} 
+                                    onKeyDown={(e) => { if (e.key === 'Enter') verify(); }}
+                                    className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl p-4 text-center text-2xl font-bold mb-4 focus:border-blue-400 focus:outline-none" 
+                                    placeholder="?" 
+                                    autoFocus 
+                                />
+                                <div className="flex gap-3">
+                                    <button onClick={() => setChallenge(null)} className="flex-1 py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">Cancel</button>
+                                    <button onClick={verify} className="flex-1 bg-blue-600 py-3 rounded-xl font-bold text-white hover:bg-blue-700 shadow-lg shadow-blue-200 transition-colors">Enter</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <div className="text-center animate-pop">
+                        <h1 className={`text-5xl md:text-7xl font-extrabold ${theme.accentText} mb-4 drop-shadow-sm`}>Hello! 👋</h1>
+                        <p className="text-xl text-gray-600 font-medium">Let's learn Yoruba & Gungbe!</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-2xl">
+                        <button onClick={() => setMode('kid_dashboard')} className={`group relative overflow-hidden bg-white p-8 rounded-3xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all transform border-b-8 ${theme.cardBorder}`}>
+                            <div className={`absolute top-0 right-0 w-24 h-24 rounded-bl-full opacity-20 ${theme.primary}`}></div>
+                            
+                            {/* Theme Toggles inside the card */}
+                            <div className="absolute top-4 right-4 z-10 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                                <button onClick={() => changeTheme('boy')} className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all ${currentTheme === 'boy' ? 'border-blue-500 bg-blue-100 scale-110' : 'border-gray-200 bg-white hover:scale-110 opacity-60'}`} title="Adventure Explorer">👦</button>
+                                <button onClick={() => changeTheme('girl')} className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-all ${currentTheme === 'girl' ? 'border-pink-500 bg-pink-100 scale-110' : 'border-gray-200 bg-white hover:scale-110 opacity-60'}`} title="Magical World">👧</button>
+                            </div>
+
+                            <div className="flex flex-col items-center">
+                                <div className="mb-4 text-7xl">
+                                    <Icon name={theme.kidIcon} size={96} className={theme.accentText} />
+                                </div>
+                                <span className={`text-3xl font-bold ${theme.accentText}`}>I'm a Kid</span>
+                                <span className="text-sm text-gray-400 mt-2 font-bold uppercase tracking-wider">Play & Learn</span>
+                                
+                                {/* Progress Badge */}
+                                {stickers.length > 0 && (
+                                    <div className="mt-4 bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full text-xs font-bold border border-yellow-200 flex items-center gap-1">
+                                        ⭐ {stickers.length} Stickers
+                                    </div>
+                                )}
+                            </div>
+                        </button>
+                        <button onClick={startChallenge} className="group relative overflow-hidden bg-white p-8 rounded-3xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all transform border-b-8 border-gray-200">
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-gray-200 rounded-bl-full opacity-20"></div>
+                            <div className="flex flex-col items-center">
+                                <span className="text-7xl mb-4">🛠️</span>
+                                <span className="text-3xl font-bold text-gray-600">Parent Zone</span>
+                                <span className="text-sm text-gray-400 mt-2 font-bold uppercase tracking-wider">Settings & Edit</span>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings }) => {
+            const [view, setView] = useState('words');
+            const [newWord, setNewWord] = useState({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
+            
+            // Inline editing state
+            const [editingId, setEditingId] = useState(null);
+            const [editForm, setEditForm] = useState(null);
+            const [deleteConfirmationId, setDeleteConfirmationId] = useState(null);
+
+            const [filter, setFilter] = useState('All');
+            const [searchTerm, setSearchTerm] = useState('');
+            const [exporting, setExporting] = useState(false);
+            const fileInputRef = useRef(null);
+
+            const categories = ['All', ...CATEGORIES];
+
+            const handleAddWord = () => {
+                if (!newWord.english) return;
+                const id = Date.now().toString();
+                setWords([{ ...newWord, id }, ...words]);
+                setNewWord({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
+            };
+
+            const startEdit = (word) => { 
+                setEditingId(word.id);
+                setEditForm({ ...word });
+                setDeleteConfirmationId(null);
+            };
+
+            const saveEdit = () => {
+                setWords(words.map(w => w.id === editingId ? editForm : w));
+                setEditingId(null);
+                setEditForm(null);
+            };
+
+            const cancelEdit = () => {
+                setEditingId(null);
+                setEditForm(null);
+            };
+
+            const requestDelete = (id) => {
+                setDeleteConfirmationId(id);
+                setEditingId(null);
+            };
+
+            const confirmDelete = (id) => {
+                setWords(words.filter(w => w.id !== id));
+                setDeleteConfirmationId(null);
+            };
+
+            const cancelDelete = () => {
+                setDeleteConfirmationId(null);
+            };
+
+
+            const handleBackup = async () => { 
+                setExporting(true);
+                try {
+                    const audioEntries = await getAllAudioEntries();
+                    const base64Audio = {};
+                    for (const [key, blob] of Object.entries(audioEntries)) base64Audio[key] = await blobToBase64(blob);
+                    const backupData = { words: words, audio: base64Audio, version: 1, timestamp: new Date().toISOString() };
+                    const blob = new Blob([JSON.stringify(backupData)], {type: 'application/json'});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = `little-linguist-backup-${new Date().toISOString().slice(0,10)}.json`; a.click();
+                } catch (e) { alert('Export failed: ' + e.message); }
+                setExporting(false);
+            };
+
+            const handleRestore = (e) => {
+                const file = e.target.files[0]; if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.words) {
+                            setWords(data.words);
+                            if (data.audio) { for (const [key, base64] of Object.entries(data.audio)) { const blob = await base64ToBlob(base64); await saveAudioBlob(key, blob); } }
+                            alert('Backup restored!');
+                        }
+                    } catch (err) { alert('Error reading backup'); }
+                };
+                reader.readAsText(file);
+            };
+
+            const handleReset = async () => { 
+                 if (confirm("⚠️ ARE YOU SURE? This will delete all words.")) {
+                    localStorage.removeItem('littleLinguistWords_v3'); setWords(INITIAL_DATA);
+                    try { const db = await initDB(); const t = db.transaction([STORE_NAME], 'readwrite'); t.objectStore(STORE_NAME).clear(); alert("Reset complete."); } catch(e) { console.error(e); }
+                }
+            };
+
+            const filteredWords = words.filter(w => filter === 'All' ? true : w.category === filter).filter(w => w.english.toLowerCase().includes(searchTerm.toLowerCase()));
+
+            return (
+                <div className="max-w-4xl mx-auto p-4 space-y-4">
+                    <div className="flex gap-2 mb-4 bg-white p-2 rounded-xl shadow-sm">
+                        <button onClick={() => setView('words')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'words' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`}>Words</button>
+                        <button onClick={() => setView('stats')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'stats' ? 'bg-purple-100 text-purple-700' : 'text-gray-500'}`}>Stats</button>
+                        <button onClick={() => setView('settings')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'settings' ? 'bg-gray-100 text-gray-700' : 'text-gray-500'}`}>Settings</button>
+                    </div>
+
+                    {view === 'settings' && (
+                        <div className="space-y-4 animate-pop">
+                            <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                                <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button onClick={handleBackup} disabled={exporting} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Backup'}</button>
+                                    <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
+                                    <button onClick={handleReset} className="bg-red-50 text-red-600 p-2 rounded-lg border border-red-100 font-bold hover:bg-red-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Reset</button>
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                                <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Palette" className="text-purple-500" /> Theme</h2>
+                                <div className="flex gap-2">
+                                    {Object.values(THEMES).map(t => (
+                                        <button key={t.id} onClick={() => changeTheme(t.id)} className={`flex-1 p-2 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${currentTheme === t.id ? `border-${t.primary.split('-')[1]}-500 bg-gray-50` : 'border-transparent bg-gray-100 hover:bg-gray-200'}`}>
+                                            <span className="text-xl">{t.bgIcons[0]}</span><span className="font-bold text-gray-700 text-sm">{t.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                                <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Volume2" className="text-green-500" /> Preferences</h2>
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-gray-600">Auto-play audio</span>
+                                        <button onClick={() => setSettings({...settings, autoPlayAudio: !settings.autoPlayAudio})} className={`w-12 h-6 rounded-full transition-colors relative ${settings.autoPlayAudio ? 'bg-green-500' : 'bg-gray-300'}`}>
+                                            <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${settings.autoPlayAudio ? 'translate-x-6' : ''}`}></div>
+                                        </button>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-gray-600">Flashcard Front</span>
+                                        <div className="flex bg-gray-100 rounded-lg p-1">
+                                            <button 
+                                                onClick={() => setSettings({...settings, flashcardFront: 'english'})}
+                                                className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${settings.flashcardFront === 'english' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400'}`}
+                                            >
+                                                English
+                                            </button>
+                                            <button 
+                                                onClick={() => setSettings({...settings, flashcardFront: 'native'})}
+                                                className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${settings.flashcardFront === 'native' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400'}`}
+                                            >
+                                                Native
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'stats' && (
+                        <div className="space-y-4 animate-pop">
+                            <div className="bg-white rounded-2xl shadow-sm p-6 border border-gray-100">
+                                <div className="grid grid-cols-2 gap-4 mb-6">
+                                    <div className="bg-green-50 p-4 rounded-2xl text-center"><div className="text-4xl font-bold text-green-600 mb-1">{stats.correct}</div><div className="text-sm font-bold text-green-800 opacity-60">Correct</div></div>
+                                    <div className="bg-orange-50 p-4 rounded-2xl text-center"><div className="text-4xl font-bold text-orange-600 mb-1">{stats.incorrect}</div><div className="text-sm font-bold text-orange-800 opacity-60">Mistakes</div></div>
+                                </div>
+                                <h3 className="font-bold text-gray-600 mb-3">Top Categories</h3>
+                                <div className="space-y-2">
+                                    {Object.entries(stats.categories).sort((a,b) => b[1] - a[1]).slice(0, 5).map(([cat, count]) => (
+                                        <div key={cat} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg"><span className="font-medium text-gray-700">{cat}</span><span className="font-bold text-blue-600">{count} correct</span></div>
+                                    ))}
+                                    {Object.keys(stats.categories).length === 0 && (
+                                        <div className="text-center text-gray-400 italic py-4">Play games to see stats!</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'words' && (
+                        <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100 animate-pop">
+                            <div id="edit-form" className="grid grid-cols-6 gap-2 mb-4 bg-gray-50 p-2 rounded-lg">
+                                <input placeholder="Icon" value={newWord.icon} onChange={e => setNewWord({...newWord, icon: e.target.value})} className="p-2 rounded border w-full text-center" />
+                                <input placeholder="English" value={newWord.english} onChange={e => setNewWord({...newWord, english: e.target.value})} className="p-2 rounded border w-full" />
+                                <input placeholder="Yoruba" value={newWord.yoruba} onChange={e => setNewWord({...newWord, yoruba: e.target.value})} className="p-2 rounded border w-full" />
+                                <input placeholder="Gungbe" value={newWord.gungbe} onChange={e => setNewWord({...newWord, gungbe: e.target.value})} className="p-2 rounded border w-full" />
+                                <select value={newWord.category} onChange={e => setNewWord({...newWord, category: e.target.value})} className="p-2 rounded border w-full">{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                                <button onClick={handleAddWord} className="bg-green-500 text-white rounded font-bold p-2 hover:bg-green-600">Add</button>
+                            </div>
+                            <input type="text" placeholder="Search..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full p-2 border rounded-lg mb-2" />
+                            <div className="flex gap-2 overflow-x-auto pb-2 mb-2 no-scrollbar">{categories.map(cat => <button key={cat} onClick={() => setFilter(cat)} className={`px-3 py-1 rounded-full text-xs font-bold ${filter === cat ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'}`}>{cat}</button>)}</div>
+                            <div className="space-y-2">
+                                {filteredWords.map(word => {
+                                    const isEditing = editingId === word.id;
+                                    const isDeleting = deleteConfirmationId === word.id;
+
+                                    if (isEditing) {
+                                        return (
+                                            <div key={word.id} className="grid grid-cols-1 md:grid-cols-6 gap-2 bg-blue-50 p-2 rounded border-2 border-blue-200 shadow-sm items-center">
+                                                <input value={editForm.icon} onChange={e => setEditForm({...editForm, icon: e.target.value})} className="p-2 rounded border text-center" placeholder="Icon" />
+                                                <input value={editForm.english} onChange={e => setEditForm({...editForm, english: e.target.value})} className="p-2 rounded border" placeholder="English" />
+                                                <input value={editForm.yoruba} onChange={e => setEditForm({...editForm, yoruba: e.target.value})} className="p-2 rounded border" placeholder="Yoruba" />
+                                                <input value={editForm.gungbe} onChange={e => setEditForm({...editForm, gungbe: e.target.value})} className="p-2 rounded border" placeholder="Gungbe" />
+                                                <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} className="p-2 rounded border">{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                                                <div className="flex gap-1 justify-end">
+                                                    <button onClick={saveEdit} className="bg-green-500 text-white p-2 rounded hover:bg-green-600"><Icon name="Save" size={16}/></button>
+                                                    <button onClick={cancelEdit} className="bg-gray-400 text-white p-2 rounded hover:bg-gray-500"><Icon name="X" size={16}/></button>
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+
+                                    return (
+                                        <div key={word.id} className="flex items-center justify-between bg-white p-2 rounded border shadow-sm">
+                                            <div className="flex items-center gap-3 overflow-hidden">
+                                                <span className="text-2xl min-w-[30px] text-center">{word.icon}</span>
+                                                <div className="truncate">
+                                                    <div className="font-bold truncate">{word.english}</div>
+                                                    <div className="text-xs text-gray-500 truncate">{word.yoruba} • {word.gungbe}</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-2 shrink-0">
+                                                 {!isDeleting && (
+                                                     <>
+                                                        <VoiceRecorder wordId={word.id} lang="yoruba" textToSpeak={word.yoruba} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'yoruba')} label="Y"/>
+                                                        <VoiceRecorder wordId={word.id} lang="gungbe" textToSpeak={word.gungbe} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'gungbe')} label="G"/>
+                                                        <button onClick={() => startEdit(word)} className="text-blue-400 p-2 hover:bg-blue-50 rounded"><Icon name="Edit" size={16}/></button>
+                                                        <button onClick={() => requestDelete(word.id)} className="text-red-400 p-2 hover:bg-red-50 rounded"><Icon name="Trash2" size={16}/></button>
+                                                     </>
+                                                 )}
+                                                 {isDeleting && (
+                                                     <div className="flex items-center gap-2 bg-red-50 px-2 rounded">
+                                                         <span className="text-xs font-bold text-red-500">Delete?</span>
+                                                         <button onClick={() => confirmDelete(word.id)} className="text-green-600 p-1 hover:bg-green-100 rounded"><Icon name="Check" size={16}/></button>
+                                                         <button onClick={cancelDelete} className="text-gray-500 p-1 hover:bg-gray-200 rounded"><Icon name="X" size={16}/></button>
+                                                     </div>
+                                                 )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const VoiceRecorder = ({ wordId, lang, textToSpeak, playAudio, onRecordComplete, label }) => {
+             const [isRecording, setIsRecording] = useState(false);
+             const [hasRec, setHasRec] = useState(false);
+             const mediaRecorder = useRef(null);
+
+             useEffect(() => { getAudioBlob(`${wordId}_${lang}`).then(b => { if(b) setHasRec(true); }); }, [wordId, lang]);
+
+             const toggleRec = async () => {
+                 if (isRecording) { mediaRecorder.current.stop(); setIsRecording(false); } 
+                 else {
+                     try {
+                         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                         mediaRecorder.current = new MediaRecorder(stream);
+                         const chunks = [];
+                         mediaRecorder.current.ondataavailable = e => chunks.push(e.data);
+                         mediaRecorder.current.onstop = async () => {
+                             const blob = new Blob(chunks, { type: 'audio/webm' });
+                             await saveAudioBlob(`${wordId}_${lang}`, blob); setHasRec(true); onRecordComplete();
+                         };
+                         mediaRecorder.current.start(); setIsRecording(true);
+                     } catch(e) { alert("Mic Error"); }
+                 }
+             };
+
+             return (
+                 <div className="flex gap-1 items-center bg-gray-100 rounded-full px-2 py-1">
+                     <span className="text-[10px] font-bold text-gray-500 w-2">{label}</span>
+                     {hasRec && <button onClick={() => playAudio(wordId, lang)} className="text-blue-500 hover:text-blue-700"><Icon name="Play" size={14}/></button>}
+                     {isRecording ? (
+                         <div className="flex items-center gap-1 w-8 justify-center" onClick={toggleRec}>
+                             <div className="w-1 bg-red-500 animate-wave" style={{animationDelay: '0s'}}></div>
+                             <div className="w-1 bg-red-500 animate-wave" style={{animationDelay: '0.1s'}}></div>
+                             <div className="w-1 bg-red-500 animate-wave" style={{animationDelay: '0.2s'}}></div>
+                         </div>
+                     ) : (
+                         <div className="flex gap-1">
+                             <button onClick={toggleRec} className="text-gray-400 hover:text-red-500"><Icon name="Mic" size={14}/></button>
+                         </div>
+                     )}
+                 </div>
+             );
+        };
+
+        const KidZone = ({ words, playAudio, setMode, theme, stickers, setStickers, stats, updateStats, settings }) => {
+            const [view, setView] = useState('menu'); // menu, learn, quiz, stickers
+            const [category, setCategory] = useState(null);
+            const [lang, setLang] = useState('yoruba');
+
+            if (view === 'menu') {
+                return (
+                    <div className="p-4 max-w-2xl mx-auto flex flex-col gap-6 animate-pop">
+                        <div className="flex justify-center bg-white/50 backdrop-blur p-2 rounded-full self-center shadow-sm">
+                            <button onClick={() => setLang('yoruba')} className={`px-6 py-2 rounded-full font-bold transition-all ${lang === 'yoruba' ? theme.secondary + ' text-white shadow-md' : 'text-gray-500'}`}>Yoruba</button>
+                            <button onClick={() => setLang('gungbe')} className={`px-6 py-2 rounded-full font-bold transition-all ${lang === 'gungbe' ? theme.secondary + ' text-white shadow-md' : 'text-gray-500'}`}>Gungbe</button>
+                        </div>
+                        <div className="flex justify-center gap-4">
+                            <button onClick={() => setView('stickers')} className="bg-white p-4 rounded-2xl shadow-lg hover:scale-105 transition-transform flex flex-col items-center min-w-[100px]"><span className="text-4xl mb-1">⭐</span><span className="text-xs font-bold text-gray-400">Stickers ({stickers.length})</span></button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                            <button onClick={() => setView('categories_learn')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-2 transition-all text-center border-b-8 ${theme.cardBorder}`}><span className="text-8xl block mb-6 drop-shadow-md">📚</span><span className={`text-2xl font-black ${theme.accentText}`}>Learn Words</span></button>
+                            <button onClick={() => setView('categories_quiz')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-2 transition-all text-center border-b-8 ${theme.cardBorder}`}><span className="text-8xl block mb-6 drop-shadow-md">🎮</span><span className={`text-2xl font-black ${theme.accentText}`}>Play Game</span></button>
+                        </div>
+                        <button onClick={() => setMode('landing')} className="text-gray-500 font-bold mt-8 self-center hover:bg-white/50 px-6 py-2 rounded-full transition-all">Back to Home</button>
+                    </div>
+                );
+            }
+
+            if (view === 'stickers') return <StickerBook stickers={stickers} setView={setView} />;
+            
+            if (view.startsWith('categories')) {
+                const isQuiz = view.includes('quiz');
+                return (
+                    <div className="p-4 max-w-4xl mx-auto animate-pop">
+                        <div className="flex items-center gap-4 mb-6">
+                             <button onClick={() => setView('menu')} className="bg-white p-3 rounded-full shadow hover:bg-gray-50 text-gray-500"><Icon name="Home"/></button>
+                             <h2 className="text-2xl font-black text-gray-700">Pick a Topic!</h2>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                             <button onClick={() => { setCategory('All'); setView(isQuiz ? 'quiz' : 'learn'); }} className={`col-span-2 ${theme.buttonClass} text-white p-6 rounded-3xl text-xl font-bold flex items-center justify-center gap-2`}><span>🌟</span> Mix Everything!</button>
+                             {[...new Set(words.map(w => w.category))].map(cat => (
+                                 <button key={cat} onClick={() => { setCategory(cat); setView(isQuiz ? 'quiz' : 'learn'); }} className={`bg-white p-4 rounded-2xl shadow-lg border-b-4 ${theme.cardBorder} hover:scale-105 transition-all`}>
+                                     <div className="text-4xl mb-2">{words.find(w => w.category === cat)?.icon}</div><div className="font-bold text-gray-600 text-sm truncate">{cat}</div>
+                                 </button>
+                             ))}
+                        </div>
+                    </div>
+                );
+            }
+
+            const gameWords = category === 'All' ? words : words.filter(w => w.category === category);
+            
+            if (view === 'learn') return <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} settings={settings} />;
+            if (view === 'quiz') return <QuizMode words={words} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} settings={settings} />;
+            return null;
+        };
+
+        const StickerBook = ({ stickers, setView }) => (
+            <div className="p-4 max-w-4xl mx-auto animate-pop">
+                <div className="flex items-center gap-4 mb-6">
+                        <button onClick={() => setView('menu')} className="bg-white p-3 rounded-full shadow hover:bg-gray-50 text-gray-500"><Icon name="Home"/></button>
+                        <h2 className="text-2xl font-black text-gray-700">My Sticker Book</h2>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {STICKERS_DATA.map(s => {
+                        const isUnlocked = stickers.includes(s.id);
+                        return (
+                            <div key={s.id} className={`p-4 rounded-2xl flex flex-col items-center text-center transition-all ${isUnlocked ? 'bg-white shadow-lg' : 'bg-gray-100 opacity-60'}`}>
+                                <div className={`text-6xl mb-2 transition-transform ${isUnlocked ? 'scale-100' : 'scale-90 grayscale blur-sm'}`}>{s.icon}</div>
+                                <div className="font-bold text-gray-800">{s.name}</div>
+                                <div className="text-xs text-gray-500 mt-1">{s.desc}</div>
+                                {isUnlocked ? <div className="mt-2 text-green-500 font-bold text-xs bg-green-50 px-2 py-1 rounded-full">Unlocked!</div> : <div className="mt-2 text-gray-400 font-bold text-xs bg-gray-200 px-2 py-1 rounded-full">Locked</div>}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+
+        const FlashCards = ({ words, lang, playAudio, onBack, theme, settings }) => {
+            const [index, setIndex] = useState(0);
+            const [isFlipped, setIsFlipped] = useState(false);
+            
+            // Swipe handling refs
+            const touchStartX = useRef(null);
+            const touchEndX = useRef(null);
+            const minSwipeDistance = 50;
+            
+            const word = words[index];
+            const isEnglishFront = settings.flashcardFront === 'english';
+            
+            // Determine text based on settings
+            const frontText = isEnglishFront ? word.english : (lang === 'yoruba' ? word.yoruba : word.gungbe);
+            const backText = isEnglishFront ? (lang === 'yoruba' ? word.yoruba : word.gungbe) : word.english;
+
+            // Play audio only when the card index changes (i.e. a new card loads), always on the front face.
+            // Flipping is handled separately in the flip() handler below.
+            useEffect(() => {
+                if (!settings.autoPlayAudio) return;
+                // Cancel any speech already in progress from the previous card
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                const isEnglishVisible = isEnglishFront; // new card always shows front
+                if (isEnglishVisible) {
+                    if ('speechSynthesis' in window) {
+                        const u = new SpeechSynthesisUtterance(word.english);
+                        setTimeout(() => window.speechSynthesis.speak(u), 300);
+                    }
+                } else {
+                    playAudio(word.id, lang);
+                }
+            }, [index, settings.flashcardFront]); // intentionally excludes isFlipped
+
+            const next = () => {
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                setIsFlipped(false);
+                setTimeout(() => setIndex((index + 1) % words.length), 200);
+            };
+            const prev = () => {
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                setIsFlipped(false);
+                setTimeout(() => setIndex((index - 1 + words.length) % words.length), 200);
+            };
+            const flip = () => { 
+                // Manual audio trigger on tap if autoplay is off
+                if (!isFlipped && !settings.autoPlayAudio) {
+                    const isEnglishVisible = isEnglishFront; // Before flip, check front
+                    // We want to play the AUDIO of the side we are REVEALING (Back)
+                    // If front is English, back is Native. So play Native.
+                    // If front is Native, back is English. So play English.
+                    
+                    if (isEnglishVisible) {
+                         playAudio(word.id, lang);
+                    } else {
+                         const u = new SpeechSynthesisUtterance(word.english); 
+                         window.speechSynthesis.speak(u);
+                    }
+                }
+                setIsFlipped(!isFlipped); 
+            };
+
+            // Swipe Event Handlers
+            const onTouchStart = (e) => {
+                touchEndX.current = null; 
+                touchStartX.current = e.targetTouches[0].clientX;
+            };
+
+            const onTouchMove = (e) => {
+                touchEndX.current = e.targetTouches[0].clientX;
+            };
+
+            const onTouchEnd = () => {
+                if (!touchStartX.current || !touchEndX.current) return;
+                const distance = touchStartX.current - touchEndX.current;
+                const isLeftSwipe = distance > minSwipeDistance;
+                const isRightSwipe = distance < -minSwipeDistance;
+                
+                if (isLeftSwipe) {
+                    next();
+                } else if (isRightSwipe) {
+                    prev();
+                }
+            };
+
+            return (
+                <div 
+                    className="flex flex-col items-center justify-center min-h-[70vh] px-4 animate-pop touch-pan-y"
+                    onTouchStart={onTouchStart}
+                    onTouchMove={onTouchMove}
+                    onTouchEnd={onTouchEnd}
+                >
+                    <div className="w-full max-w-sm flex justify-between items-center mb-6">
+                        <button onClick={onBack} className="bg-white/80 backdrop-blur p-2 rounded-full shadow text-gray-600 hover:scale-110 transition-transform"><Icon name="Home"/></button>
+                        <span className="bg-white/80 backdrop-blur px-4 py-1 rounded-full font-bold text-gray-600 shadow-sm">{index+1} / {words.length}</span>
+                    </div>
+                    
+                    <div className="relative w-full max-w-sm aspect-[3/4] cursor-pointer perspective-1000" onClick={flip}>
+                        <div className={`relative w-full h-full duration-500 transform-style-3d transition-transform ${isFlipped ? 'rotate-y-180' : ''}`}>
+                            <div className={`absolute w-full h-full bg-white rounded-[2rem] shadow-2xl flex flex-col items-center justify-center p-8 border-b-[12px] ${theme.cardBorder} backface-hidden`}>
+                                <span className="text-9xl mb-8 animate-bounce-slow drop-shadow-md">{word.icon}</span><h2 className="text-4xl font-black text-gray-800 text-center capitalize">{frontText}</h2>
+                                <div className="mt-8 flex flex-col items-center gap-1 opacity-60">
+                                    <p className={`${theme.accentText} font-bold animate-pulse`}>Tap to flip</p>
+                                    <p className="text-xs font-bold text-gray-400">Swipe ↔ to move</p>
+                                </div>
+                            </div>
+                            <div className={`absolute w-full h-full ${theme.primary} rounded-[2rem] shadow-2xl flex flex-col items-center justify-center p-8 border-b-[12px] border-black/20 rotate-y-180 backface-hidden`}>
+                                <span className="text-8xl mb-6 bg-white/20 rounded-full p-4 backdrop-blur-sm">{word.icon}</span><h2 className="text-4xl font-black text-white text-center mb-4 capitalize">{backText}</h2><div className="bg-white text-gray-800 p-4 rounded-full shadow-lg mt-4 animate-bounce"><Icon name="Volume2" size={32} /></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex gap-6 mt-8 w-full max-w-sm">
+                        <button onClick={prev} className="flex-1 bg-white py-4 rounded-2xl font-bold text-gray-500 shadow-lg hover:bg-gray-50 active:scale-95 transition-all">Prev</button>
+                        <button onClick={next} className={`flex-1 ${theme.buttonClass} py-4 rounded-2xl font-bold text-white transition-all`}>Next</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const QuizMode = ({ words, category, lang, playAudio, onBack, theme, stats, updateStats, stickers, setStickers, settings }) => {
+             const [q, setQ] = useState(null);
+             const [opts, setOpts] = useState([]);
+             const [score, setScore] = useState(0);
+             const [reward, setReward] = useState(false);
+             const [unlockedSticker, setUnlockedSticker] = useState(null);
+             const [wrongId, setWrongId] = useState(null);   // id of the tapped wrong option
+             const [locked, setLocked] = useState(false);    // blocks input during feedback
+             const pool = category === 'All' ? words : words.filter(w => w.category === category);
+
+             const playWrongSound = () => {
+                 try {
+                     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                     const osc = ctx.createOscillator();
+                     const gain = ctx.createGain();
+                     osc.connect(gain);
+                     gain.connect(ctx.destination);
+                     osc.type = 'sawtooth';
+                     osc.frequency.setValueAtTime(220, ctx.currentTime);
+                     osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.3);
+                     gain.gain.setValueAtTime(0.25, ctx.currentTime);
+                     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+                     osc.start(ctx.currentTime);
+                     osc.stop(ctx.currentTime + 0.35);
+                 } catch(e) { /* audio unavailable, fail silently */ }
+             };
+
+             const gen = () => {
+                 if(pool.length < 2) return;
+                 const target = pool[Math.floor(Math.random() * pool.length)];
+                 let categoryPeers = words.filter(w => w.category === target.category && w.id !== target.id);
+                 let others = categoryPeers.sort(() => 0.5 - Math.random()).slice(0, 3);
+                 setQ(target);
+                 setOpts([target, ...others].sort(() => 0.5 - Math.random()));
+                 setWrongId(null);
+                 setLocked(false);
+                 if (settings.autoPlayAudio) setTimeout(() => playAudio(target.id, lang), 300);
+             };
+
+             useEffect(gen, []);
+
+             const check = (sel) => {
+                 if (locked) return;
+                 const isCorrect = sel.id === q.id;
+                 updateStats(isCorrect, q.category);
+                 if (isCorrect) {
+                     setLocked(true);
+                     setScore(score + 1); setReward(true); confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+                     const newStats = { ...stats, correct: stats.correct + 1, categories: { ...stats.categories, [q.category]: (stats.categories[q.category]||0) + 1 } };
+                     const newUnlock = STICKERS_DATA.find(s => !stickers.includes(s.id) && s.criteria(newStats));
+                     if (newUnlock) { setStickers([...stickers, newUnlock.id]); setUnlockedSticker(newUnlock); }
+                     setTimeout(() => { setReward(false); setUnlockedSticker(null); gen(); }, 2500);
+                 } else {
+                     // Wrong answer — shake, highlight red, play sound, then clear after 800ms
+                     setWrongId(sel.id);
+                     setLocked(true);
+                     playWrongSound();
+                     setTimeout(() => {
+                         setWrongId(null);
+                         setLocked(false);
+                     }, 800);
+                 }
+             };
+
+             if(!q) return <div className="p-10 text-center font-bold">Loading...</div>;
+
+             return (
+                 <div className="flex flex-col items-center h-full p-4 max-w-xl mx-auto animate-pop relative">
+                     {reward && !unlockedSticker && <div className="absolute inset-0 flex items-center justify-center z-50 text-9xl animate-bounce drop-shadow-2xl">🎉</div>}
+                     {unlockedSticker && (
+                         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white/90 backdrop-blur rounded-3xl animate-pop p-6 text-center">
+                             <div className="text-8xl mb-4 animate-bounce">{unlockedSticker.icon}</div>
+                             <h3 className="text-2xl font-black text-yellow-500 mb-2">New Sticker!</h3>
+                             <p className="text-xl font-bold text-gray-700">{unlockedSticker.name}</p>
+                         </div>
+                     )}
+                     <div className="w-full flex justify-between items-center mb-6">
+                         <button onClick={onBack} className="bg-white p-2 rounded-full shadow text-gray-500"><Icon name="X"/></button>
+                         <div className="bg-white px-4 py-2 rounded-full font-bold text-yellow-500 shadow-sm border-2 border-yellow-100 flex items-center gap-2 text-xl"><Icon name="Award"/> {score}</div>
+                     </div>
+                     <div className="text-center mb-8 w-full">
+                         <h2 className="text-xl font-bold text-gray-600 mb-4 uppercase tracking-widest opacity-70">Find the...</h2>
+                         <button onClick={() => playAudio(q.id, lang)} className={`${theme.buttonClass} w-full py-8 rounded-3xl text-3xl font-black text-white flex items-center justify-center gap-4 transition-transform active:scale-95`}><Icon name="Volume2" size={32} /><span className="capitalize">{q[lang] || q.english}</span></button>
+                     </div>
+                     <div className="grid grid-cols-2 gap-4 w-full">
+                         {opts.map((o, i) => {
+                             const isWrong = wrongId === o.id;
+                             const idleClass = locked
+                                 ? 'bg-white shadow-[0_4px_0_rgb(229,231,235)] ' + theme.quizOptionBorder + ' opacity-60'
+                                 : 'bg-white shadow-[0_4px_0_rgb(229,231,235)] ' + theme.quizOptionBorder + ' hover:scale-105 active:scale-95 active:shadow-none active:translate-y-[4px]';
+                             const btnClass = isWrong
+                                 ? 'answer-wrong animate-shake aspect-square rounded-3xl border-4 transition-all flex items-center justify-center'
+                                 : 'aspect-square rounded-3xl border-4 transition-all flex items-center justify-center ' + idleClass;
+                             return (
+                                 <button key={i} onClick={() => check(o)} className={btnClass}>
+                                     <span className="text-6xl drop-shadow-sm">{o.icon}</span>
+                                 </button>
+                             );
+                         })}
+                     </div>
+                 </div>
+             );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('SW registered:', reg.scope))
+                    .catch(err => console.log('SW registration failed:', err));
+            });
+        }
+    </script>
+</body>
+</html>
