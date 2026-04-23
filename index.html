@@ -280,6 +280,7 @@
         };
 
         const REMOTE_WORDS_URL = 'https://ssseyon.github.io/Gungbe-Yor/words.json';
+        const REMOTE_VERSION_URL = 'https://ssseyon.github.io/Gungbe-Yor/version.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
         const isNewer = (a, b) => {
@@ -352,15 +353,15 @@
                     setSettings({ autoPlayAudio: true, flashcardFront: 'english', ...JSON.parse(savedSettings) });
                 }
 
-                // Check for remote update on every launch
+                // Check for remote update on every launch using tiny version.json only
                 const storedVersion = localStorage.getItem('ll_words_version');
-                const localVer = storedVersion || '0.0.0'; // '0.0.0' ensures any real words.json triggers update
+                const localVer = storedVersion || '0.0.0';
                 setLocalVersion(storedVersion || 'none');
-                fetch(REMOTE_WORDS_URL + '?t=' + Date.now())
+                fetch(REMOTE_VERSION_URL + '?t=' + Date.now())
                     .then(r => r.json())
                     .then(remote => {
                         if (remote.version && isNewer(localVer, remote.version)) {
-                            setUpdateAvailable(remote);
+                            setUpdateAvailable(remote.version); // just store the version string, not the full data
                         }
                     })
                     .catch(() => {});
@@ -370,25 +371,27 @@
                 if (!updateAvailable) return;
                 setUpdateLoading(true);
                 try {
-                    if (updateAvailable.words) {
-                        setWords(updateAvailable.words);
-                        localStorage.setItem('littleLinguistWords_v3', JSON.stringify(updateAvailable.words));
+                    // Only now fetch the full words.json
+                    const res = await fetch(REMOTE_WORDS_URL + '?t=' + Date.now());
+                    const data = await res.json();
+                    if (data.words) {
+                        setWords(data.words);
+                        localStorage.setItem('littleLinguistWords_v3', JSON.stringify(data.words));
                     }
-                    if (updateAvailable.audio) {
-                        for (const [key, base64] of Object.entries(updateAvailable.audio)) {
+                    if (data.audio) {
+                        for (const [key, base64] of Object.entries(data.audio)) {
                             const blob = await base64ToBlob(base64);
                             await saveAudioBlob(key, blob);
                         }
-                        // Reload audio cache from fresh blobs
                         const newCache = {};
-                        for (const key of Object.keys(updateAvailable.audio)) {
+                        for (const key of Object.keys(data.audio)) {
                             const blob = await getAudioBlob(key);
                             if (blob) newCache[key] = URL.createObjectURL(blob);
                         }
                         setAudioCache(newCache);
                     }
-                    localStorage.setItem('ll_words_version', updateAvailable.version);
-                    setLocalVersion(updateAvailable.version);
+                    localStorage.setItem('ll_words_version', updateAvailable);
+                    setLocalVersion(updateAvailable);
                     setUpdateAvailable(null);
                 } catch(e) { alert('Update failed: ' + e.message); }
                 setUpdateLoading(false);
@@ -449,7 +452,7 @@
                     <div className={`${theme.primary} text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center transition-colors duration-500`}>
                         <div className="flex flex-col leading-tight">
                             <span className="font-bold text-xl">🌍 Little Linguist</span>
-                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.4.0</span>
+                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.5.0</span>
                         </div>
                         {mode !== 'landing' && (
                              <button onClick={() => setMode('landing')} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-bold flex items-center gap-2 transition-all">
@@ -459,13 +462,13 @@
                     </div>
                     {updateAvailable && (
                         <div className="relative z-50 bg-yellow-400 text-yellow-900 px-4 py-3 flex items-center justify-between gap-3 shadow-md">
-                            <span className="font-bold text-sm">📦 New word list available (v{updateAvailable.version})</span>
+                            <span className="font-bold text-sm">📦 New word pack available (v{updateAvailable})</span>
                             <button
                                 onClick={applyUpdate}
                                 disabled={updateLoading}
                                 className="bg-yellow-900 text-yellow-100 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-yellow-800 transition-colors shrink-0"
                             >
-                                {updateLoading ? 'Updating...' : 'Update Now'}
+                                {updateLoading ? 'Downloading...' : 'Update Now'}
                             </button>
                         </div>
                     )}
@@ -682,13 +685,20 @@
                     const newVersion = incrementVersion(currentVersion);
                     localStorage.setItem('ll_words_version', newVersion);
                     setLocalVersion(newVersion);
+
+                    // Download words.json (full data)
                     const backupData = { words: words, audio: base64Audio, version: newVersion, timestamp: new Date().toISOString() };
                     const blob = new Blob([JSON.stringify(backupData)], {type: 'application/json'});
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'words.json';
-                    a.click();
+                    a.href = url; a.download = 'words.json'; a.click();
+
+                    // Download version.json (tiny file for fast launch check)
+                    const versionData = { version: newVersion, timestamp: new Date().toISOString() };
+                    const vBlob = new Blob([JSON.stringify(versionData)], {type: 'application/json'});
+                    const vUrl = URL.createObjectURL(vBlob);
+                    const vA = document.createElement('a');
+                    vA.href = vUrl; vA.download = 'version.json'; vA.click();
                 } catch (e) { alert('Export failed: ' + e.message); }
                 setExporting(false);
             };
