@@ -279,6 +279,27 @@
           return await res.blob();
         };
 
+        // Generate a short hash of a base64 string for change detection
+        const hashString = async (str) => {
+            const bytes = new TextEncoder().encode(str.slice(0, 2000)); // sample first 2KB for speed
+            const buf = await crypto.subtle.digest('SHA-256', bytes);
+            return Array.from(new Uint8Array(buf)).slice(0, 6).map(b => b.toString(16).padStart(2,'0')).join('');
+        };
+
+        // Write blobs to IndexedDB in parallel batches of 20
+        const batchSaveAudio = async (entries) => {
+            const keys = Object.keys(entries);
+            const BATCH = 20;
+            for (let i = 0; i < keys.length; i += BATCH) {
+                await Promise.all(
+                    keys.slice(i, i + BATCH).map(async (key) => {
+                        const blob = await base64ToBlob(entries[key].data);
+                        await saveAudioBlob(key, blob);
+                    })
+                );
+            }
+        };
+
         const REMOTE_WORDS_URL = 'https://ssseyon.github.io/Gungbe-Yor/words.json';
         const REMOTE_VERSION_URL = 'https://ssseyon.github.io/Gungbe-Yor/version.json';
 
@@ -371,25 +392,48 @@
                 if (!updateAvailable) return;
                 setUpdateLoading(true);
                 try {
-                    // Only now fetch the full words.json
                     const res = await fetch(REMOTE_WORDS_URL + '?t=' + Date.now());
                     const data = await res.json();
+
+                    // Always update words (text only, tiny)
                     if (data.words) {
                         setWords(data.words);
                         localStorage.setItem('littleLinguistWords_v3', JSON.stringify(data.words));
                     }
+
                     if (data.audio) {
-                        for (const [key, base64] of Object.entries(data.audio)) {
-                            const blob = await base64ToBlob(base64);
-                            await saveAudioBlob(key, blob);
+                        // Load stored hashes to compare against
+                        const storedHashes = JSON.parse(localStorage.getItem('ll_audio_hashes') || '{}');
+                        const newHashes = { ...storedHashes };
+                        const toWrite = {};
+                        let unchanged = 0;
+
+                        for (const [key, entry] of Object.entries(data.audio)) {
+                            const remoteHash = entry.hash;
+                            if (remoteHash && storedHashes[key] === remoteHash) {
+                                unchanged++;
+                                continue; // skip — nothing changed
+                            }
+                            toWrite[key] = entry;
+                            newHashes[key] = remoteHash || '';
                         }
-                        const newCache = {};
-                        for (const key of Object.keys(data.audio)) {
-                            const blob = await getAudioBlob(key);
-                            if (blob) newCache[key] = URL.createObjectURL(blob);
+
+                        console.log('Audio: ' + Object.keys(toWrite).length + ' new/changed, ' + unchanged + ' skipped');
+
+                        if (Object.keys(toWrite).length > 0) {
+                            await batchSaveAudio(toWrite);
+                            // Refresh audio cache for updated keys only
+                            const newCache = { ...audioCache };
+                            for (const key of Object.keys(toWrite)) {
+                                const blob = await getAudioBlob(key);
+                                if (blob) newCache[key] = URL.createObjectURL(blob);
+                            }
+                            setAudioCache(newCache);
                         }
-                        setAudioCache(newCache);
+
+                        localStorage.setItem('ll_audio_hashes', JSON.stringify(newHashes));
                     }
+
                     localStorage.setItem('ll_words_version', updateAvailable);
                     setLocalVersion(updateAvailable);
                     setUpdateAvailable(null);
@@ -452,7 +496,7 @@
                     <div className={`${theme.primary} text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center transition-colors duration-500`}>
                         <div className="flex flex-col leading-tight">
                             <span className="font-bold text-xl">🌍 Little Linguist</span>
-                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.5.0</span>
+                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.6.0</span>
                         </div>
                         {mode !== 'landing' && (
                              <button onClick={() => setMode('landing')} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-bold flex items-center gap-2 transition-all">
@@ -679,21 +723,30 @@
                 setExporting(true);
                 try {
                     const audioEntries = await getAllAudioEntries();
-                    const base64Audio = {};
-                    for (const [key, blob] of Object.entries(audioEntries)) base64Audio[key] = await blobToBase64(blob);
+                    const audioWithHashes = {};
+                    for (const [key, blob] of Object.entries(audioEntries)) {
+                        const base64 = await blobToBase64(blob);
+                        const hash = await hashString(base64);
+                        audioWithHashes[key] = { data: base64, hash };
+                    }
                     const currentVersion = localStorage.getItem('ll_words_version') || '0.0.0';
                     const newVersion = incrementVersion(currentVersion);
                     localStorage.setItem('ll_words_version', newVersion);
                     setLocalVersion(newVersion);
 
-                    // Download words.json (full data)
-                    const backupData = { words: words, audio: base64Audio, version: newVersion, timestamp: new Date().toISOString() };
+                    // Also update stored hashes locally so next export is accurate
+                    const hashes = {};
+                    for (const [key, entry] of Object.entries(audioWithHashes)) hashes[key] = entry.hash;
+                    localStorage.setItem('ll_audio_hashes', JSON.stringify(hashes));
+
+                    // Download words.json
+                    const backupData = { words, audio: audioWithHashes, version: newVersion, timestamp: new Date().toISOString() };
                     const blob = new Blob([JSON.stringify(backupData)], {type: 'application/json'});
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url; a.download = 'words.json'; a.click();
 
-                    // Download version.json (tiny file for fast launch check)
+                    // Download version.json
                     const versionData = { version: newVersion, timestamp: new Date().toISOString() };
                     const vBlob = new Blob([JSON.stringify(versionData)], {type: 'application/json'});
                     const vUrl = URL.createObjectURL(vBlob);
@@ -711,10 +764,26 @@
                         const data = JSON.parse(event.target.result);
                         if (data.words) {
                             setWords(data.words);
-                            if (data.audio) { for (const [key, base64] of Object.entries(data.audio)) { const blob = await base64ToBlob(base64); await saveAudioBlob(key, blob); } }
-                            alert('Backup restored!');
+                            localStorage.setItem('littleLinguistWords_v3', JSON.stringify(data.words));
                         }
-                    } catch (err) { alert('Error reading backup'); }
+                        if (data.audio) {
+                            const hashes = {};
+                            for (const [key, entry] of Object.entries(data.audio)) {
+                                // Support both old format (plain base64) and new format ({data, hash})
+                                const base64 = typeof entry === 'string' ? entry : entry.data;
+                                const hash = typeof entry === 'string' ? '' : (entry.hash || '');
+                                const blob = await base64ToBlob(base64);
+                                await saveAudioBlob(key, blob);
+                                hashes[key] = hash;
+                            }
+                            localStorage.setItem('ll_audio_hashes', JSON.stringify(hashes));
+                        }
+                        if (data.version) {
+                            localStorage.setItem('ll_words_version', data.version);
+                            setLocalVersion(data.version);
+                        }
+                        alert('Backup restored!');
+                    } catch (err) { alert('Error reading backup: ' + err.message); }
                 };
                 reader.readAsText(file);
             };
