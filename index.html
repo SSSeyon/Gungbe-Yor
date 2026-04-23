@@ -505,7 +505,9 @@
                     )}
                 </div>
             );
-        }; = ({ words }) => {
+        };
+
+        const LibraryStats = ({ words }) => {
             const [audioCounts, setAudioCounts] = useState({ yoruba: 0, gungbe: 0 });
 
             useEffect(() => {
