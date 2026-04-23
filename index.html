@@ -449,7 +449,7 @@
                     <div className={`${theme.primary} text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center transition-colors duration-500`}>
                         <div className="flex flex-col leading-tight">
                             <span className="font-bold text-xl">🌍 Little Linguist</span>
-                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.3.0</span>
+                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.4.0</span>
                         </div>
                         {mode !== 'landing' && (
                              <button onClick={() => setMode('landing')} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-bold flex items-center gap-2 transition-all">
@@ -959,6 +959,13 @@
                              <button onClick={() => setView('menu')} className="bg-white p-3 rounded-full shadow hover:bg-gray-50 text-gray-500"><Icon name="Home"/></button>
                              <h2 className="text-2xl font-black text-gray-700">Pick a Topic!</h2>
                         </div>
+                        {wordsWithAudio.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-16 text-center">
+                                <div className="text-6xl mb-4">📭</div>
+                                <p className="text-xl font-bold text-gray-500 mb-2">No words with audio yet</p>
+                                <p className="text-gray-400 text-sm">Tap the update banner to download the latest word pack, or add audio recordings in the Parent Zone.</p>
+                            </div>
+                        ) : (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                              <button onClick={() => { setCategory('All'); setView(isQuiz ? 'quiz' : 'learn'); }} className={`col-span-2 ${theme.buttonClass} text-white p-6 rounded-3xl text-xl font-bold flex items-center justify-center gap-2`}><span>🌟</span> Mix Everything!</button>
                              {[...new Set(wordsWithAudio.map(w => w.category))].map(cat => (
@@ -967,14 +974,24 @@
                                  </button>
                              ))}
                         </div>
+                        )}
                     </div>
                 );
             }
 
             const gameWords = category === 'All' ? wordsWithAudio : wordsWithAudio.filter(w => w.category === category);
-            
-            if (view === 'learn') return <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} settings={settings} />;
-            if (view === 'quiz') return <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} settings={settings} />;
+
+            const noWordsMessage = (
+                <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center animate-pop">
+                    <div className="text-7xl mb-4">📭</div>
+                    <h2 className="text-2xl font-black text-gray-600 mb-2">No words yet!</h2>
+                    <p className="text-gray-400 font-medium mb-6">Words only appear here once they have audio recordings. Check for updates or add audio in the Parent Zone.</p>
+                    <button onClick={() => setView('menu')} className="bg-white px-6 py-3 rounded-2xl font-bold text-gray-500 shadow-lg hover:bg-gray-50 transition-all">Go Back</button>
+                </div>
+            );
+
+            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} settings={settings} />;
+            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} settings={settings} />;
             return null;
         };
 
