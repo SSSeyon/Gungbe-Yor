@@ -328,8 +328,9 @@
             const [stickers, setStickers] = useState([]);
             const [stats, setStats] = useState({ correct: 0, incorrect: 0, categories: {} });
             const [settings, setSettings] = useState({ autoPlayAudio: true, flashcardFront: 'english' });
-            const [updateAvailable, setUpdateAvailable] = useState(null); // holds remote data when newer version found
+            const [updateAvailable, setUpdateAvailable] = useState(null);
             const [updateLoading, setUpdateLoading] = useState(false);
+            const [localVersion, setLocalVersion] = useState('none');
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('littleLinguistTheme');
@@ -351,15 +352,17 @@
                 }
 
                 // Check for remote update on every launch
-                const localVersion = localStorage.getItem('ll_words_version') || '1.0.0';
+                const storedVersion = localStorage.getItem('ll_words_version');
+                const localVer = storedVersion || '0.0.0'; // '0.0.0' ensures any real words.json triggers update
+                setLocalVersion(storedVersion || 'none');
                 fetch(REMOTE_WORDS_URL + '?t=' + Date.now())
                     .then(r => r.json())
                     .then(remote => {
-                        if (remote.version && isNewer(localVersion, remote.version)) {
+                        if (remote.version && isNewer(localVer, remote.version)) {
                             setUpdateAvailable(remote);
                         }
                     })
-                    .catch(() => {}); // silently fail if offline or file not found yet
+                    .catch(() => {});
             }, []);
 
             const applyUpdate = async () => {
@@ -384,6 +387,7 @@
                         setAudioCache(newCache);
                     }
                     localStorage.setItem('ll_words_version', updateAvailable.version);
+                    setLocalVersion(updateAvailable.version);
                     setUpdateAvailable(null);
                 } catch(e) { alert('Update failed: ' + e.message); }
                 setUpdateLoading(false);
@@ -466,7 +470,7 @@
                     )}
                     <div className="relative z-10 pb-20">
                         {mode === 'landing' && <Landing setMode={setMode} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setMode} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -612,7 +616,7 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings }) => {
+        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion }) => {
             const [view, setView] = useState('words');
             const [newWord, setNewWord] = useState({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
             
@@ -673,9 +677,10 @@
                     const audioEntries = await getAllAudioEntries();
                     const base64Audio = {};
                     for (const [key, blob] of Object.entries(audioEntries)) base64Audio[key] = await blobToBase64(blob);
-                    const currentVersion = localStorage.getItem('ll_words_version') || '1.0.0';
+                    const currentVersion = localStorage.getItem('ll_words_version') || '0.0.0';
                     const newVersion = incrementVersion(currentVersion);
                     localStorage.setItem('ll_words_version', newVersion);
+                    setLocalVersion(newVersion);
                     const backupData = { words: words, audio: base64Audio, version: newVersion, timestamp: new Date().toISOString() };
                     const blob = new Blob([JSON.stringify(backupData)], {type: 'application/json'});
                     const url = URL.createObjectURL(blob);
@@ -724,7 +729,11 @@
                         <div className="space-y-4 animate-pop">
                             <LibraryStats words={words} />
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
-                                <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
+                                <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
+                                <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg">
+                                    <span className="text-sm font-bold text-gray-500">Data Pack Version</span>
+                                    <span className="text-sm font-black text-blue-600">{localVersion === 'none' ? 'No pack installed' : 'v' + localVersion}</span>
+                                </div>
                                 <div className="grid grid-cols-3 gap-2">
                                     <button onClick={handleBackup} disabled={exporting} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Backup'}</button>
                                     <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
