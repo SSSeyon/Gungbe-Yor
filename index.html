@@ -135,12 +135,14 @@
 
         // --- CONSTANTS ---
         const STICKERS_DATA = [
-            { id: 'first_win', name: 'First Win', icon: '🌟', desc: 'Get your first correct answer', criteria: (stats) => stats.correct >= 1 },
+            { id: 'first_win', name: 'First Win!', icon: '🌟', desc: 'Get your first correct answer', criteria: (stats) => stats.correct >= 1 },
+            { id: 'three_wins', name: 'On a Roll!', icon: '🔥', desc: 'Get 3 correct answers', criteria: (stats) => stats.correct >= 3 },
             { id: 'quiz_master', name: 'Quiz Master', icon: '🎓', desc: 'Get 10 correct answers', criteria: (stats) => stats.correct >= 10 },
-            { id: 'animal_expert', name: 'Animal Expert', icon: '🦁', desc: 'Master 5 Animal words', criteria: (stats) => (stats.categories['Animals'] || 0) >= 5 },
-            { id: 'super_star', name: 'Super Star', icon: '🏆', desc: 'Get 50 correct answers', criteria: (stats) => stats.correct >= 50 },
-            { id: 'explorer', name: 'Explorer', icon: '🧭', desc: 'Try 3 different categories', criteria: (stats) => Object.keys(stats.categories || {}).length >= 3 },
-            { id: 'foodie', name: 'Foodie', icon: '🍎', desc: 'Master 5 Food words', criteria: (stats) => (stats.categories['Food'] || 0) >= 5 },
+            { id: 'animal_expert', name: 'Animal Expert', icon: '🦁', desc: 'Master 3 Animal words', criteria: (stats) => (stats.categories['Animals'] || 0) >= 3 },
+            { id: 'super_star', name: 'Super Star', icon: '🏆', desc: 'Get 25 correct answers', criteria: (stats) => stats.correct >= 25 },
+            { id: 'explorer', name: 'Explorer', icon: '🧭', desc: 'Try 2 different categories', criteria: (stats) => Object.keys(stats.categories || {}).length >= 2 },
+            { id: 'foodie', name: 'Foodie', icon: '🍎', desc: 'Master 3 Food words', criteria: (stats) => (stats.categories['Food'] || 0) >= 3 },
+            { id: 'champ', name: 'Champion!', icon: '👑', desc: 'Get 50 correct answers', criteria: (stats) => stats.correct >= 50 },
         ];
 
         // --- ICONS ---
@@ -496,7 +498,7 @@
                     <div className={`${theme.primary} text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center transition-colors duration-500`}>
                         <div className="flex flex-col leading-tight">
                             <span className="font-bold text-xl">🌍 Little Linguist</span>
-                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.6.0</span>
+                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.7.0</span>
                         </div>
                         {mode !== 'landing' && (
                              <button onClick={() => setMode('landing')} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-bold flex items-center gap-2 transition-all">
@@ -994,65 +996,112 @@
         };
 
         const KidZone = ({ words, audioCache, playAudio, setMode, theme, stickers, setStickers, stats, updateStats, settings }) => {
-            const [view, setView] = useState('menu');
+            const [view, setView] = useState('lang_pick'); // lang_pick first
             const [category, setCategory] = useState(null);
-            const [lang, setLang] = useState('yoruba');
+            const [lang, setLang] = useState(null);
             const [audioKeys, setAudioKeys] = useState(new Set());
 
-            // Load all stored audio keys from IndexedDB on mount and when lang changes
             useEffect(() => {
                 getAllAudioEntries().then(entries => {
                     setAudioKeys(new Set(Object.keys(entries)));
                 }).catch(() => {});
             }, [lang, words]);
 
-            // Show words that have a native audio clip in IndexedDB for the selected language
-            const wordsWithAudio = words.filter(w => audioKeys.has(w.id + '_' + lang));
+            const wordsWithAudio = lang ? words.filter(w => audioKeys.has(w.id + '_' + lang)) : [];
 
+            // --- Language Picker ---
+            if (view === 'lang_pick') {
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-[80vh] p-6 gap-8 animate-pop">
+                        <div className="text-center">
+                            <div className="text-7xl mb-4">👋</div>
+                            <h1 className="text-3xl font-black text-gray-700 mb-2">What are we learning today?</h1>
+                        </div>
+                        <div className="flex flex-col gap-5 w-full max-w-xs">
+                            <button
+                                onClick={() => { setLang('gungbe'); setView('menu'); }}
+                                className="w-full py-10 rounded-[2rem] text-white font-black text-3xl shadow-[0_8px_0_rgb(21,128,61)] active:shadow-none active:translate-y-2 transition-all flex flex-col items-center gap-2"
+                                style={{background: 'linear-gradient(to bottom, #22c55e, #16a34a)'}}
+                            >
+                                <span className="text-5xl">🌿</span>
+                                Gungbe
+                            </button>
+                            <button
+                                onClick={() => { setLang('yoruba'); setView('menu'); }}
+                                className="w-full py-10 rounded-[2rem] text-gray-800 font-black text-3xl shadow-[0_8px_0_rgb(161,98,7)] active:shadow-none active:translate-y-2 transition-all flex flex-col items-center gap-2"
+                                style={{background: 'linear-gradient(to bottom, #fde047, #eab308)'}}
+                            >
+                                <span className="text-5xl">☀️</span>
+                                Yoruba
+                            </button>
+                        </div>
+                        <button onClick={() => setMode('landing')} className="text-gray-400 font-bold mt-4">← Back</button>
+                    </div>
+                );
+            }
+
+            // --- Main Menu ---
             if (view === 'menu') {
                 return (
                     <div className="p-4 max-w-2xl mx-auto flex flex-col gap-6 animate-pop">
-                        <div className="flex justify-center bg-white/50 backdrop-blur p-2 rounded-full self-center shadow-sm">
-                            <button onClick={() => setLang('yoruba')} className={`px-6 py-2 rounded-full font-bold transition-all ${lang === 'yoruba' ? theme.secondary + ' text-white shadow-md' : 'text-gray-500'}`}>Yoruba</button>
-                            <button onClick={() => setLang('gungbe')} className={`px-6 py-2 rounded-full font-bold transition-all ${lang === 'gungbe' ? theme.secondary + ' text-white shadow-md' : 'text-gray-500'}`}>Gungbe</button>
+                        <div className="flex items-center justify-between mb-2">
+                            <button onClick={() => setView('lang_pick')} className="bg-white/80 px-4 py-2 rounded-full font-bold text-gray-500 shadow text-sm">
+                                {lang === 'gungbe' ? '🌿 Gungbe' : '☀️ Yoruba'} ↩
+                            </button>
+                            <button onClick={() => setView('stickers')} className="bg-white p-3 rounded-2xl shadow-lg flex flex-col items-center min-w-[70px]">
+                                <span className="text-3xl">⭐</span>
+                                <span className="text-xs font-bold text-gray-400">{stickers.length} Stickers</span>
+                            </button>
                         </div>
-                        <div className="flex justify-center gap-4">
-                            <button onClick={() => setView('stickers')} className="bg-white p-4 rounded-2xl shadow-lg hover:scale-105 transition-transform flex flex-col items-center min-w-[100px]"><span className="text-4xl mb-1">⭐</span><span className="text-xs font-bold text-gray-400">Stickers ({stickers.length})</span></button>
+                        <div className="grid grid-cols-1 gap-5">
+                            <button onClick={() => setView('categories_learn')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
+                                <span className="text-8xl block mb-4 drop-shadow-md">📚</span>
+                                <span className={`text-3xl font-black ${theme.accentText}`}>Learn Words</span>
+                            </button>
+                            <button onClick={() => setView('categories_listen')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-purple-200">
+                                <span className="text-8xl block mb-4 drop-shadow-md">👂</span>
+                                <span className="text-3xl font-black text-purple-600">Listen & Repeat</span>
+                            </button>
+                            <button onClick={() => setView('categories_quiz')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
+                                <span className="text-8xl block mb-4 drop-shadow-md">🎮</span>
+                                <span className={`text-3xl font-black ${theme.accentText}`}>Play Game</span>
+                            </button>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-                            <button onClick={() => setView('categories_learn')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-2 transition-all text-center border-b-8 ${theme.cardBorder}`}><span className="text-8xl block mb-6 drop-shadow-md">📚</span><span className={`text-2xl font-black ${theme.accentText}`}>Learn Words</span></button>
-                            <button onClick={() => setView('categories_quiz')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-2 transition-all text-center border-b-8 ${theme.cardBorder}`}><span className="text-8xl block mb-6 drop-shadow-md">🎮</span><span className={`text-2xl font-black ${theme.accentText}`}>Play Game</span></button>
-                        </div>
-                        <button onClick={() => setMode('landing')} className="text-gray-500 font-bold mt-8 self-center hover:bg-white/50 px-6 py-2 rounded-full transition-all">Back to Home</button>
+                        <button onClick={() => setMode('landing')} className="text-gray-400 font-bold mt-4 self-center">← Back to Home</button>
                     </div>
                 );
             }
 
             if (view === 'stickers') return <StickerBook stickers={stickers} setView={setView} />;
-            
+
+            // --- Category Picker ---
             if (view.startsWith('categories')) {
-                const isQuiz = view.includes('quiz');
+                const mode = view.replace('categories_', '');
+                const nextView = mode;
                 return (
                     <div className="p-4 max-w-4xl mx-auto animate-pop">
                         <div className="flex items-center gap-4 mb-6">
-                             <button onClick={() => setView('menu')} className="bg-white p-3 rounded-full shadow hover:bg-gray-50 text-gray-500"><Icon name="Home"/></button>
-                             <h2 className="text-2xl font-black text-gray-700">Pick a Topic!</h2>
+                            <button onClick={() => setView('menu')} className="bg-white p-4 rounded-full shadow hover:bg-gray-50 text-gray-500 text-2xl">🏠</button>
+                            <h2 className="text-3xl font-black text-gray-700">Pick a Topic!</h2>
                         </div>
                         {wordsWithAudio.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-16 text-center">
                                 <div className="text-6xl mb-4">📭</div>
                                 <p className="text-xl font-bold text-gray-500 mb-2">No words with audio yet</p>
-                                <p className="text-gray-400 text-sm">Tap the update banner to download the latest word pack, or add audio recordings in the Parent Zone.</p>
+                                <p className="text-gray-400 text-sm">Tap the update banner to download the latest word pack.</p>
                             </div>
                         ) : (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                             <button onClick={() => { setCategory('All'); setView(isQuiz ? 'quiz' : 'learn'); }} className={`col-span-2 ${theme.buttonClass} text-white p-6 rounded-3xl text-xl font-bold flex items-center justify-center gap-2`}><span>🌟</span> Mix Everything!</button>
-                             {[...new Set(wordsWithAudio.map(w => w.category))].map(cat => (
-                                 <button key={cat} onClick={() => { setCategory(cat); setView(isQuiz ? 'quiz' : 'learn'); }} className={`bg-white p-4 rounded-2xl shadow-lg border-b-4 ${theme.cardBorder} hover:scale-105 transition-all`}>
-                                     <div className="text-4xl mb-2">{wordsWithAudio.find(w => w.category === cat)?.icon}</div><div className="font-bold text-gray-600 text-sm truncate">{cat}</div>
-                                 </button>
-                             ))}
-                        </div>
+                            <div className="grid grid-cols-2 gap-5">
+                                <button onClick={() => { setCategory('All'); setView(nextView); }} className={`col-span-2 ${theme.buttonClass} text-white p-8 rounded-3xl text-2xl font-black flex items-center justify-center gap-3`}>
+                                    <span className="text-4xl">🌟</span> Mix Everything!
+                                </button>
+                                {[...new Set(wordsWithAudio.map(w => w.category))].map(cat => (
+                                    <button key={cat} onClick={() => { setCategory(cat); setView(nextView); }} className={`bg-white p-6 rounded-3xl shadow-lg border-b-6 ${theme.cardBorder} hover:scale-105 transition-all`}>
+                                        <div className="text-5xl mb-3">{wordsWithAudio.find(w => w.category === cat)?.icon}</div>
+                                        <div className="font-black text-gray-600 text-lg">{cat}</div>
+                                    </button>
+                                ))}
+                            </div>
                         )}
                     </div>
                 );
@@ -1064,13 +1113,14 @@
                 <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center animate-pop">
                     <div className="text-7xl mb-4">📭</div>
                     <h2 className="text-2xl font-black text-gray-600 mb-2">No words yet!</h2>
-                    <p className="text-gray-400 font-medium mb-6">Words only appear here once they have audio recordings. Check for updates or add audio in the Parent Zone.</p>
-                    <button onClick={() => setView('menu')} className="bg-white px-6 py-3 rounded-2xl font-bold text-gray-500 shadow-lg hover:bg-gray-50 transition-all">Go Back</button>
+                    <p className="text-gray-400 font-medium mb-6">Check for updates or add audio in the Parent Zone.</p>
+                    <button onClick={() => setView('menu')} className="bg-white px-8 py-4 rounded-2xl font-bold text-gray-500 shadow-lg text-xl">Go Back</button>
                 </div>
             );
 
-            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} settings={settings} />;
-            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} settings={settings} />;
+            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} />;
+            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_listen')} theme={theme} />;
+            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
             return null;
         };
 
@@ -1096,132 +1146,176 @@
             </div>
         );
 
-        const FlashCards = ({ words, lang, playAudio, onBack, theme, settings }) => {
+        const FlashCards = ({ words, lang, playAudio, onBack, theme }) => {
             const [index, setIndex] = useState(0);
             const [isFlipped, setIsFlipped] = useState(false);
-            
-            // Swipe handling refs
+            const [showStar, setShowStar] = useState(false);
+            const autoAdvanceRef = useRef(null);
+
             const touchStartX = useRef(null);
             const touchEndX = useRef(null);
             const minSwipeDistance = 50;
-            
+
             const word = words[index];
-            const isEnglishFront = settings.flashcardFront === 'english';
-            
-            // Determine text based on settings
-            const frontText = isEnglishFront ? word.english : (lang === 'yoruba' ? word.yoruba : word.gungbe);
-            const backText = isEnglishFront ? (lang === 'yoruba' ? word.yoruba : word.gungbe) : word.english;
+            // Native language is always the front
+            const frontText = lang === 'yoruba' ? word.yoruba : word.gungbe;
+            const backText = word.english;
 
-            // Play audio only when the card index changes (i.e. a new card loads), always on the front face.
-            // Flipping is handled separately in the flip() handler below.
+            const playFront = () => playAudio(word.id, lang);
+            const playBack = () => {
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                    const u = new SpeechSynthesisUtterance(word.english);
+                    window.speechSynthesis.speak(u);
+                }
+            };
+
+            // Auto-play front audio on new card load, then auto-flip after 2.5s, then auto-advance after another 2.5s
             useEffect(() => {
-                if (!settings.autoPlayAudio) return;
-                // Cancel any speech already in progress from the previous card
-                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-                const isEnglishVisible = isEnglishFront; // new card always shows front
-                if (isEnglishVisible) {
-                    if ('speechSynthesis' in window) {
-                        const u = new SpeechSynthesisUtterance(word.english);
-                        setTimeout(() => window.speechSynthesis.speak(u), 300);
-                    }
-                } else {
-                    playAudio(word.id, lang);
-                }
-            }, [index, settings.flashcardFront]); // intentionally excludes isFlipped
-
-            const next = () => {
                 if ('speechSynthesis' in window) window.speechSynthesis.cancel();
                 setIsFlipped(false);
-                setTimeout(() => setIndex((index + 1) % words.length), 200);
-            };
-            const prev = () => {
+                setShowStar(false);
+                playAudio(word.id, lang);
+
+                // Auto flip to show English after 2.5s
+                const flipTimer = setTimeout(() => {
+                    setIsFlipped(true);
+                    playBack();
+                    // Show star briefly
+                    setShowStar(true);
+                    setTimeout(() => setShowStar(false), 1000);
+                }, 2500);
+
+                // Auto advance after another 2.5s
+                autoAdvanceRef.current = setTimeout(() => {
+                    setIndex(i => (i + 1) % words.length);
+                }, 5200);
+
+                return () => {
+                    clearTimeout(flipTimer);
+                    clearTimeout(autoAdvanceRef.current);
+                };
+            }, [index]);
+
+            const goNext = () => {
+                clearTimeout(autoAdvanceRef.current);
                 if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-                setIsFlipped(false);
-                setTimeout(() => setIndex((index - 1 + words.length) % words.length), 200);
+                setIndex(i => (i + 1) % words.length);
             };
-            const flip = () => {
-                const revealingBack = !isFlipped;
-                if (revealingBack) {
-                    // Play the audio of the side being revealed
-                    const revealingNative = isEnglishFront; // front=english means back=native
-                    if (revealingNative) {
-                        playAudio(word.id, lang);
-                    } else {
-                        if ('speechSynthesis' in window) {
-                            window.speechSynthesis.cancel();
-                            const u = new SpeechSynthesisUtterance(word.english);
-                            setTimeout(() => window.speechSynthesis.speak(u), 100);
-                        }
-                    }
-                }
-                setIsFlipped(!isFlipped);
+            const goPrev = () => {
+                clearTimeout(autoAdvanceRef.current);
+                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                setIndex(i => (i - 1 + words.length) % words.length);
             };
 
-            // Swipe Event Handlers
-            const onTouchStart = (e) => {
-                touchEndX.current = null; 
-                touchStartX.current = e.targetTouches[0].clientX;
+            // Tap card to replay current side audio
+            const handleCardTap = () => {
+                clearTimeout(autoAdvanceRef.current);
+                if (isFlipped) { playBack(); } else { playFront(); }
             };
 
-            const onTouchMove = (e) => {
-                touchEndX.current = e.targetTouches[0].clientX;
-            };
-
+            const onTouchStart = (e) => { touchEndX.current = null; touchStartX.current = e.targetTouches[0].clientX; };
+            const onTouchMove = (e) => { touchEndX.current = e.targetTouches[0].clientX; };
             const onTouchEnd = () => {
                 if (!touchStartX.current || !touchEndX.current) return;
                 const distance = touchStartX.current - touchEndX.current;
-                const isLeftSwipe = distance > minSwipeDistance;
-                const isRightSwipe = distance < -minSwipeDistance;
-                
-                if (isLeftSwipe) {
-                    next();
-                } else if (isRightSwipe) {
-                    prev();
-                }
+                if (distance > minSwipeDistance) goNext();
+                else if (distance < -minSwipeDistance) goPrev();
             };
 
             return (
-                <div 
-                    className="flex flex-col items-center justify-center min-h-[70vh] px-4 animate-pop touch-pan-y"
-                    onTouchStart={onTouchStart}
-                    onTouchMove={onTouchMove}
-                    onTouchEnd={onTouchEnd}
-                >
-                    <div className="w-full max-w-sm flex justify-between items-center mb-6">
-                        <button onClick={onBack} className="bg-white/80 backdrop-blur p-2 rounded-full shadow text-gray-600 hover:scale-110 transition-transform"><Icon name="Home"/></button>
-                        <span className="bg-white/80 backdrop-blur px-4 py-1 rounded-full font-bold text-gray-600 shadow-sm">{index+1} / {words.length}</span>
+                <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 animate-pop touch-pan-y relative"
+                    onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+
+                    {showStar && <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none text-[120px] animate-pop">⭐</div>}
+
+                    <div className="w-full max-w-sm flex justify-between items-center mb-4">
+                        <button onClick={onBack} className="bg-white/80 backdrop-blur p-3 rounded-full shadow text-gray-600 text-xl">🏠</button>
+                        <span className="bg-white/80 backdrop-blur px-5 py-2 rounded-full font-black text-gray-600 shadow-sm text-lg">{index+1} / {words.length}</span>
                     </div>
-                    
-                    <div className="relative w-full max-w-sm aspect-[3/4] cursor-pointer perspective-1000" onClick={flip}>
+
+                    <div className="relative w-full max-w-sm aspect-[3/4] cursor-pointer perspective-1000" onClick={handleCardTap}>
                         <div className={`relative w-full h-full duration-500 transform-style-3d transition-transform ${isFlipped ? 'rotate-y-180' : ''}`}>
-                            <div className={`absolute w-full h-full bg-white rounded-[2rem] shadow-2xl flex flex-col items-center justify-center p-8 border-b-[12px] ${theme.cardBorder} backface-hidden`}>
-                                <span className="text-9xl mb-8 animate-bounce-slow drop-shadow-md">{word.icon}</span><h2 className="text-4xl font-black text-gray-800 text-center capitalize">{frontText}</h2>
-                                <div className="mt-8 flex flex-col items-center gap-1 opacity-60">
-                                    <p className={`${theme.accentText} font-bold animate-pulse`}>Tap to flip</p>
-                                    <p className="text-xs font-bold text-gray-400">Swipe ↔ to move</p>
+                            {/* Front — native language */}
+                            <div className={`absolute w-full h-full ${theme.primary} rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-8 border-b-[14px] border-black/20 backface-hidden`}>
+                                <span className="text-[110px] mb-6 drop-shadow-lg leading-none">{word.icon}</span>
+                                <h2 className="text-4xl font-black text-white text-center capitalize leading-tight">{frontText}</h2>
+                                <div className="mt-6 opacity-70">
+                                    <div className="bg-white/20 px-4 py-2 rounded-full text-white font-bold text-sm">👆 Tap to replay</div>
                                 </div>
                             </div>
-                            <div className={`absolute w-full h-full ${theme.primary} rounded-[2rem] shadow-2xl flex flex-col items-center justify-center p-8 border-b-[12px] border-black/20 rotate-y-180 backface-hidden`}>
-                                <span className="text-8xl mb-6 bg-white/20 rounded-full p-4 backdrop-blur-sm">{word.icon}</span><h2 className="text-4xl font-black text-white text-center mb-4 capitalize">{backText}</h2><div className="bg-white text-gray-800 p-4 rounded-full shadow-lg mt-4 animate-bounce"><Icon name="Volume2" size={32} /></div>
+                            {/* Back — English */}
+                            <div className={`absolute w-full h-full bg-white rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-8 border-b-[14px] ${theme.cardBorder} rotate-y-180 backface-hidden`}>
+                                <span className="text-[110px] mb-6 drop-shadow-lg leading-none">{word.icon}</span>
+                                <h2 className="text-4xl font-black text-gray-800 text-center capitalize leading-tight">{backText}</h2>
+                                <div className="mt-6 opacity-70">
+                                    <div className={`${theme.primary} px-4 py-2 rounded-full text-white font-bold text-sm`}>👆 Tap to replay</div>
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div className="flex gap-6 mt-8 w-full max-w-sm">
-                        <button onClick={prev} className="flex-1 bg-white py-4 rounded-2xl font-bold text-gray-500 shadow-lg hover:bg-gray-50 active:scale-95 transition-all">Prev</button>
-                        <button onClick={next} className={`flex-1 ${theme.buttonClass} py-4 rounded-2xl font-bold text-white transition-all`}>Next</button>
+
+                    <div className="flex gap-4 mt-6 w-full max-w-sm">
+                        <button onClick={goPrev} className="flex-1 bg-white py-5 rounded-2xl font-black text-gray-500 shadow-lg text-xl active:scale-95 transition-all">← Prev</button>
+                        <button onClick={goNext} className={`flex-1 ${theme.buttonClass} py-5 rounded-2xl font-black text-white text-xl transition-all`}>Next →</button>
                     </div>
                 </div>
             );
         };
 
-        const QuizMode = ({ words, category, lang, playAudio, onBack, theme, stats, updateStats, stickers, setStickers, settings }) => {
+        const ListenRepeat = ({ words, lang, playAudio, onBack, theme }) => {
+            const [index, setIndex] = useState(0);
+            const [played, setPlayed] = useState(false);
+            const word = words[index];
+            const nativeText = lang === 'yoruba' ? word.yoruba : word.gungbe;
+
+            useEffect(() => {
+                setPlayed(false);
+                const t = setTimeout(() => {
+                    playAudio(word.id, lang);
+                    setPlayed(true);
+                }, 400);
+                return () => clearTimeout(t);
+            }, [index]);
+
+            const replay = () => { playAudio(word.id, lang); setPlayed(true); };
+            const next = () => setIndex(i => (i + 1) % words.length);
+            const prev = () => setIndex(i => (i - 1 + words.length) % words.length);
+
+            return (
+                <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 animate-pop">
+                    <div className="w-full max-w-sm flex justify-between items-center mb-6">
+                        <button onClick={onBack} className="bg-white/80 p-3 rounded-full shadow text-xl">🏠</button>
+                        <span className="bg-white/80 px-5 py-2 rounded-full font-black text-gray-600 shadow-sm text-lg">{index+1} / {words.length}</span>
+                    </div>
+                    <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-10 flex flex-col items-center border-b-[14px] border-purple-200">
+                        <span className="text-[120px] mb-6 drop-shadow-lg leading-none">{word.icon}</span>
+                        <h2 className="text-4xl font-black text-gray-800 text-center mb-2 capitalize">{nativeText}</h2>
+                        <p className="text-gray-400 font-bold text-lg mb-8">"{word.english}"</p>
+                        <button onClick={replay}
+                            className="w-full py-6 rounded-2xl font-black text-white text-2xl shadow-[0_6px_0_rgb(88,28,135)] active:shadow-none active:translate-y-1 transition-all flex items-center justify-center gap-3"
+                            style={{background: 'linear-gradient(to bottom, #a855f7, #7e22ce)'}}>
+                            <span className="text-3xl">🔊</span> Hear it again!
+                        </button>
+                    </div>
+                    <p className="text-gray-400 font-bold text-lg mt-6 text-center">Listen and say it out loud! 🗣️</p>
+                    <div className="flex gap-4 mt-4 w-full max-w-sm">
+                        <button onClick={prev} className="flex-1 bg-white py-5 rounded-2xl font-black text-gray-500 shadow-lg text-xl active:scale-95 transition-all">← Prev</button>
+                        <button onClick={next} className="flex-1 py-5 rounded-2xl font-black text-white text-xl transition-all shadow-[0_6px_0_rgb(88,28,135)] active:shadow-none active:translate-y-1"
+                            style={{background: 'linear-gradient(to bottom, #a855f7, #7e22ce)'}}>Next →</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const QuizMode = ({ words, category, lang, playAudio, onBack, theme, stats, updateStats, stickers, setStickers }) => {
              const [q, setQ] = useState(null);
              const [opts, setOpts] = useState([]);
              const [score, setScore] = useState(0);
              const [reward, setReward] = useState(false);
              const [unlockedSticker, setUnlockedSticker] = useState(null);
-             const [wrongId, setWrongId] = useState(null);   // id of the tapped wrong option
-             const [locked, setLocked] = useState(false);    // blocks input during feedback
+             const [wrongId, setWrongId] = useState(null);
+             const [locked, setLocked] = useState(false);
              const pool = category === 'All' ? words : words.filter(w => w.category === category);
 
              const playWrongSound = () => {
@@ -1229,28 +1323,42 @@
                      const ctx = new (window.AudioContext || window.webkitAudioContext)();
                      const osc = ctx.createOscillator();
                      const gain = ctx.createGain();
-                     osc.connect(gain);
-                     gain.connect(ctx.destination);
+                     osc.connect(gain); gain.connect(ctx.destination);
                      osc.type = 'sawtooth';
                      osc.frequency.setValueAtTime(220, ctx.currentTime);
                      osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.3);
                      gain.gain.setValueAtTime(0.25, ctx.currentTime);
                      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-                     osc.start(ctx.currentTime);
-                     osc.stop(ctx.currentTime + 0.35);
-                 } catch(e) { /* audio unavailable, fail silently */ }
+                     osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.35);
+                 } catch(e) {}
+             };
+
+             const playCorrectSound = () => {
+                 try {
+                     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                     [523, 659, 784].forEach((freq, i) => {
+                         const osc = ctx.createOscillator();
+                         const gain = ctx.createGain();
+                         osc.connect(gain); gain.connect(ctx.destination);
+                         osc.type = 'sine';
+                         osc.frequency.value = freq;
+                         gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.12);
+                         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.3);
+                         osc.start(ctx.currentTime + i * 0.12);
+                         osc.stop(ctx.currentTime + i * 0.12 + 0.3);
+                     });
+                 } catch(e) {}
              };
 
              const gen = () => {
-                 if(pool.length < 2) return;
+                 if (pool.length < 2) return;
                  const target = pool[Math.floor(Math.random() * pool.length)];
-                 let categoryPeers = words.filter(w => w.category === target.category && w.id !== target.id);
-                 let others = categoryPeers.sort(() => 0.5 - Math.random()).slice(0, 3);
+                 const others = pool.filter(w => w.id !== target.id).sort(() => 0.5 - Math.random()).slice(0, 1);
                  setQ(target);
                  setOpts([target, ...others].sort(() => 0.5 - Math.random()));
                  setWrongId(null);
                  setLocked(false);
-                 if (settings.autoPlayAudio) setTimeout(() => playAudio(target.id, lang), 300);
+                 setTimeout(() => playAudio(target.id, lang), 300);
              };
 
              useEffect(gen, []);
@@ -1261,55 +1369,66 @@
                  updateStats(isCorrect, q.category);
                  if (isCorrect) {
                      setLocked(true);
-                     setScore(score + 1); setReward(true); confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+                     setScore(s => s + 1);
+                     setReward(true);
+                     playCorrectSound();
+                     confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 }, colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'] });
                      const newStats = { ...stats, correct: stats.correct + 1, categories: { ...stats.categories, [q.category]: (stats.categories[q.category]||0) + 1 } };
                      const newUnlock = STICKERS_DATA.find(s => !stickers.includes(s.id) && s.criteria(newStats));
                      if (newUnlock) { setStickers([...stickers, newUnlock.id]); setUnlockedSticker(newUnlock); }
-                     setTimeout(() => { setReward(false); setUnlockedSticker(null); gen(); }, 2500);
+                     setTimeout(() => { setReward(false); setUnlockedSticker(null); gen(); }, 3000);
                  } else {
-                     // Wrong answer — shake, highlight red, play sound, then clear after 800ms
                      setWrongId(sel.id);
                      setLocked(true);
                      playWrongSound();
-                     setTimeout(() => {
-                         setWrongId(null);
-                         setLocked(false);
-                     }, 800);
+                     setTimeout(() => { setWrongId(null); setLocked(false); }, 800);
                  }
              };
 
-             if(!q) return <div className="p-10 text-center font-bold">Loading...</div>;
+             if (!q) return <div className="p-10 text-center font-bold text-2xl">Loading...</div>;
 
              return (
-                 <div className="flex flex-col items-center h-full p-4 max-w-xl mx-auto animate-pop relative">
-                     {reward && !unlockedSticker && <div className="absolute inset-0 flex items-center justify-center z-50 text-9xl animate-bounce drop-shadow-2xl">🎉</div>}
-                     {unlockedSticker && (
-                         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white/90 backdrop-blur rounded-3xl animate-pop p-6 text-center">
-                             <div className="text-8xl mb-4 animate-bounce">{unlockedSticker.icon}</div>
-                             <h3 className="text-2xl font-black text-yellow-500 mb-2">New Sticker!</h3>
-                             <p className="text-xl font-bold text-gray-700">{unlockedSticker.name}</p>
+                 <div className="flex flex-col items-center min-h-[80vh] p-4 max-w-lg mx-auto animate-pop relative">
+                     {/* Correct answer celebration */}
+                     {reward && !unlockedSticker && (
+                         <div className="absolute inset-0 flex flex-col items-center justify-center z-50 pointer-events-none">
+                             <div className="text-[120px] animate-bounce drop-shadow-2xl">⭐</div>
+                             <div className="text-5xl font-black text-yellow-500 mt-2 animate-pop">Well done!</div>
                          </div>
                      )}
+                     {unlockedSticker && (
+                         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white/95 backdrop-blur rounded-3xl animate-pop p-8 text-center">
+                             <div className="text-[100px] mb-4 animate-bounce">{unlockedSticker.icon}</div>
+                             <h3 className="text-3xl font-black text-yellow-500 mb-2">New Sticker!</h3>
+                             <p className="text-2xl font-bold text-gray-700">{unlockedSticker.name}</p>
+                         </div>
+                     )}
+
                      <div className="w-full flex justify-between items-center mb-6">
-                         <button onClick={onBack} className="bg-white p-2 rounded-full shadow text-gray-500"><Icon name="X"/></button>
-                         <div className="bg-white px-4 py-2 rounded-full font-bold text-yellow-500 shadow-sm border-2 border-yellow-100 flex items-center gap-2 text-xl"><Icon name="Award"/> {score}</div>
+                         <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                         <div className="bg-white px-5 py-3 rounded-full font-black text-yellow-500 shadow-sm border-2 border-yellow-100 flex items-center gap-2 text-2xl">⭐ {score}</div>
                      </div>
-                     <div className="text-center mb-8 w-full">
-                         <h2 className="text-xl font-bold text-gray-600 mb-4 uppercase tracking-widest opacity-70">Find the...</h2>
-                         <button onClick={() => playAudio(q.id, lang)} className={`${theme.buttonClass} w-full py-8 rounded-3xl text-3xl font-black text-white flex items-center justify-center gap-4 transition-transform active:scale-95`}><Icon name="Volume2" size={32} /><span className="capitalize">{q[lang] || q.english}</span></button>
+
+                     <div className="text-center mb-6 w-full">
+                         <h2 className="text-xl font-bold text-gray-500 mb-4 uppercase tracking-widest">Find the...</h2>
+                         <button onClick={() => playAudio(q.id, lang)} className={`${theme.buttonClass} w-full py-10 rounded-3xl text-4xl font-black text-white flex items-center justify-center gap-4 active:scale-95 transition-all`}>
+                             <span className="text-4xl">🔊</span>
+                             <span className="capitalize">{q[lang] || q.english}</span>
+                         </button>
                      </div>
-                     <div className="grid grid-cols-2 gap-4 w-full">
+
+                     <div className="grid grid-cols-2 gap-5 w-full">
                          {opts.map((o, i) => {
                              const isWrong = wrongId === o.id;
-                             const idleClass = locked
-                                 ? 'bg-white shadow-[0_4px_0_rgb(229,231,235)] ' + theme.quizOptionBorder + ' opacity-60'
-                                 : 'bg-white shadow-[0_4px_0_rgb(229,231,235)] ' + theme.quizOptionBorder + ' hover:scale-105 active:scale-95 active:shadow-none active:translate-y-[4px]';
-                             const btnClass = isWrong
-                                 ? 'answer-wrong animate-shake aspect-square rounded-3xl border-4 transition-all flex items-center justify-center'
-                                 : 'aspect-square rounded-3xl border-4 transition-all flex items-center justify-center ' + idleClass;
+                             const base = 'aspect-square rounded-3xl border-4 transition-all flex flex-col items-center justify-center gap-2 p-4';
+                             const idle = locked
+                                 ? 'bg-white ' + theme.quizOptionBorder + ' opacity-50'
+                                 : 'bg-white ' + theme.quizOptionBorder + ' active:scale-95 active:translate-y-1';
+                             const cls = isWrong ? base + ' answer-wrong animate-shake' : base + ' ' + idle;
                              return (
-                                 <button key={i} onClick={() => check(o)} className={btnClass}>
-                                     <span className="text-6xl drop-shadow-sm">{o.icon}</span>
+                                 <button key={i} onClick={() => check(o)} className={cls}>
+                                     <span className="text-7xl drop-shadow-sm">{o.icon}</span>
+                                     <span className="font-black text-gray-600 text-base capitalize">{o.english}</span>
                                  </button>
                              );
                          })}
