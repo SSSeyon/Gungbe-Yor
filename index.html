@@ -386,7 +386,10 @@
                 <div className="min-h-screen relative font-sans text-gray-800">
                     <Background theme={theme} />
                     <div className={`${theme.primary} text-white p-4 shadow-lg sticky top-0 z-50 flex justify-between items-center transition-colors duration-500`}>
-                        <div className="flex items-center gap-2 font-bold text-xl"><span>🌍 Little Linguist</span></div>
+                        <div className="flex flex-col leading-tight">
+                            <span className="font-bold text-xl">🌍 Little Linguist</span>
+                            <span className="text-white/60 text-[10px] font-medium tracking-wide">v1.0.0</span>
+                        </div>
                         {mode !== 'landing' && (
                              <button onClick={() => setMode('landing')} className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-bold flex items-center gap-2 transition-all">
                                <Icon name="Home" size={16} /> Home
@@ -396,7 +399,7 @@
                     <div className="relative z-10 pb-20">
                         {mode === 'landing' && <Landing setMode={setMode} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
                         {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} />}
-                        {mode === 'kid_dashboard' && <KidZone words={words} playAudio={handleAudioPlay} setMode={setMode} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
+                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setMode} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
             );
@@ -405,6 +408,23 @@
         const Landing = ({ setMode, theme, changeTheme, currentTheme, stickers }) => {
             const [challenge, setChallenge] = useState(null);
             const [answer, setAnswer] = useState('');
+            const [installPrompt, setInstallPrompt] = useState(null);
+            const [installed, setInstalled] = useState(false);
+
+            useEffect(() => {
+                const handler = (e) => { e.preventDefault(); setInstallPrompt(e); };
+                window.addEventListener('beforeinstallprompt', handler);
+                window.addEventListener('appinstalled', () => setInstalled(true));
+                return () => window.removeEventListener('beforeinstallprompt', handler);
+            }, []);
+
+            const handleInstall = async () => {
+                if (!installPrompt) return;
+                installPrompt.prompt();
+                const { outcome } = await installPrompt.userChoice;
+                if (outcome === 'accepted') setInstalled(true);
+                setInstallPrompt(null);
+            };
             const startChallenge = () => {
                 const n1 = Math.floor(Math.random() * 5) + 1;
                 const n2 = Math.floor(Math.random() * 4) + 1;
@@ -478,11 +498,14 @@
                             </div>
                         </button>
                     </div>
+                    {!installed && installPrompt && (
+                        <button onClick={handleInstall} className="mt-2 flex items-center gap-2 bg-white/80 backdrop-blur border border-gray-200 px-5 py-3 rounded-full shadow text-gray-700 font-bold text-sm hover:bg-white transition-all">
+                            <span>📲</span> Install App
+                        </button>
+                    )}
                 </div>
             );
-        };
-
-        const LibraryStats = ({ words }) => {
+        }; = ({ words }) => {
             const [audioCounts, setAudioCounts] = useState({ yoruba: 0, gungbe: 0 });
 
             useEffect(() => {
@@ -805,10 +828,13 @@
              );
         };
 
-        const KidZone = ({ words, playAudio, setMode, theme, stickers, setStickers, stats, updateStats, settings }) => {
-            const [view, setView] = useState('menu'); // menu, learn, quiz, stickers
+        const KidZone = ({ words, audioCache, playAudio, setMode, theme, stickers, setStickers, stats, updateStats, settings }) => {
+            const [view, setView] = useState('menu');
             const [category, setCategory] = useState(null);
             const [lang, setLang] = useState('yoruba');
+
+            // Only show words that have a recorded native audio clip for the selected language
+            const wordsWithAudio = words.filter(w => audioCache[w.id + '_' + lang]);
 
             if (view === 'menu') {
                 return (
@@ -841,9 +867,9 @@
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                              <button onClick={() => { setCategory('All'); setView(isQuiz ? 'quiz' : 'learn'); }} className={`col-span-2 ${theme.buttonClass} text-white p-6 rounded-3xl text-xl font-bold flex items-center justify-center gap-2`}><span>🌟</span> Mix Everything!</button>
-                             {[...new Set(words.map(w => w.category))].map(cat => (
+                             {[...new Set(wordsWithAudio.map(w => w.category))].map(cat => (
                                  <button key={cat} onClick={() => { setCategory(cat); setView(isQuiz ? 'quiz' : 'learn'); }} className={`bg-white p-4 rounded-2xl shadow-lg border-b-4 ${theme.cardBorder} hover:scale-105 transition-all`}>
-                                     <div className="text-4xl mb-2">{words.find(w => w.category === cat)?.icon}</div><div className="font-bold text-gray-600 text-sm truncate">{cat}</div>
+                                     <div className="text-4xl mb-2">{wordsWithAudio.find(w => w.category === cat)?.icon}</div><div className="font-bold text-gray-600 text-sm truncate">{cat}</div>
                                  </button>
                              ))}
                         </div>
@@ -851,10 +877,10 @@
                 );
             }
 
-            const gameWords = category === 'All' ? words : words.filter(w => w.category === category);
+            const gameWords = category === 'All' ? wordsWithAudio : wordsWithAudio.filter(w => w.category === category);
             
             if (view === 'learn') return <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} settings={settings} />;
-            if (view === 'quiz') return <QuizMode words={words} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} settings={settings} />;
+            if (view === 'quiz') return <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} settings={settings} />;
             return null;
         };
 
@@ -923,22 +949,22 @@
                 setIsFlipped(false);
                 setTimeout(() => setIndex((index - 1 + words.length) % words.length), 200);
             };
-            const flip = () => { 
-                // Manual audio trigger on tap if autoplay is off
-                if (!isFlipped && !settings.autoPlayAudio) {
-                    const isEnglishVisible = isEnglishFront; // Before flip, check front
-                    // We want to play the AUDIO of the side we are REVEALING (Back)
-                    // If front is English, back is Native. So play Native.
-                    // If front is Native, back is English. So play English.
-                    
-                    if (isEnglishVisible) {
-                         playAudio(word.id, lang);
+            const flip = () => {
+                const revealingBack = !isFlipped;
+                if (revealingBack) {
+                    // Play the audio of the side being revealed
+                    const revealingNative = isEnglishFront; // front=english means back=native
+                    if (revealingNative) {
+                        playAudio(word.id, lang);
                     } else {
-                         const u = new SpeechSynthesisUtterance(word.english); 
-                         window.speechSynthesis.speak(u);
+                        if ('speechSynthesis' in window) {
+                            window.speechSynthesis.cancel();
+                            const u = new SpeechSynthesisUtterance(word.english);
+                            setTimeout(() => window.speechSynthesis.speak(u), 100);
+                        }
                     }
                 }
-                setIsFlipped(!isFlipped); 
+                setIsFlipped(!isFlipped);
             };
 
             // Swipe Event Handlers
