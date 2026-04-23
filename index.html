@@ -482,6 +482,43 @@
             );
         };
 
+        const LibraryStats = ({ words }) => {
+            const [audioCounts, setAudioCounts] = useState({ yoruba: 0, gungbe: 0 });
+
+            useEffect(() => {
+                getAllAudioEntries().then(entries => {
+                    const keys = Object.keys(entries);
+                    setAudioCounts({
+                        yoruba: keys.filter(k => k.endsWith('_yoruba')).length,
+                        gungbe: keys.filter(k => k.endsWith('_gungbe')).length,
+                    });
+                }).catch(() => {});
+            }, [words]);
+
+            const stats = [
+                { label: 'Total Words', value: words.length, colour: 'blue', icon: '📚' },
+                { label: 'Yoruba Audio', value: audioCounts.yoruba, colour: 'green', icon: '🎙️' },
+                { label: 'Gungbe Audio', value: audioCounts.gungbe, colour: 'purple', icon: '🎙️' },
+            ];
+
+            return (
+                <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                    <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
+                        <Icon name="BarChart" className="text-blue-500" /> Library
+                    </h2>
+                    <div className="grid grid-cols-3 gap-3">
+                        {stats.map(({ label, value, colour, icon }) => (
+                            <div key={label} className={'bg-' + colour + '-50 rounded-xl p-3 text-center border border-' + colour + '-100'}>
+                                <div className="text-xl mb-1">{icon}</div>
+                                <div className={'text-2xl font-black text-' + colour + '-600 mb-1'}>{value}</div>
+                                <div className={'text-xs font-bold text-' + colour + '-800 opacity-70 leading-tight'}>{label}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
         const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings }) => {
             const [view, setView] = useState('words');
             const [newWord, setNewWord] = useState({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
@@ -586,6 +623,7 @@
 
                     {view === 'settings' && (
                         <div className="space-y-4 animate-pop">
+                            <LibraryStats words={words} />
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
                                 <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
                                 <div className="grid grid-cols-3 gap-2">
