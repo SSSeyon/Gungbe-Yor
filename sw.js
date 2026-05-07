@@ -1,101 +1,86 @@
-const CACHE_NAME = 'little-linguist-v5';
+// SpendWise Service Worker
+// Cache-first for static assets, network-only for Firebase/Firestore
+const CACHE = 'spendwise-v4';
 
-// CDN scripts to pre-cache on install (Tailwind is now inlined so not needed)
-const CDN_ASSETS = [
-  'https://unpkg.com/react@18/umd/react.production.min.js',
-  'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js',
-  'https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js',
+const STATIC = [
+  './',
+  './index.html',
+  './manifest.json',
+  'https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700;800&display=swap',
+  'https://cdn.jsdelivr.net/npm/chart.js',
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
 ];
 
-// Local files to pre-cache on install
-const LOCAL_ASSETS = [
-  '/Gungbe-Yor/',
-  '/Gungbe-Yor/index.html',
-  '/Gungbe-Yor/manifest.json',
-  '/Gungbe-Yor/icon-192.png',
-  '/Gungbe-Yor/icon-512.png',
+// Origins that must always go to the network — never cache
+const NETWORK_ONLY = [
+  'firestore.googleapis.com',
+  'firebase.googleapis.com',
+  'identitytoolkit.googleapis.com',
+  'securetoken.googleapis.com',
+  'firebaseinstallations.googleapis.com',
+  'fonts.gstatic.com',  // font files — let browser cache handle these
 ];
 
-// ── Install: pre-cache everything ──────────────────────────────────────────
-self.addEventListener('install', (event) => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-
-    // Cache local files (must succeed)
-    await cache.addAll(LOCAL_ASSETS).catch(() => {});
-
-    // Cache CDN scripts (best effort — don't block install if offline)
-    await Promise.allSettled(
-      CDN_ASSETS.map(url =>
-        fetch(url)
-          .then(res => { if (res.ok) cache.put(url, res); })
-          .catch(() => {})
-      )
-    );
-  })());
-  self.skipWaiting();
+// ── Install: pre-cache static assets ──────────────────────────────────────
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE).then(cache => {
+      // Add each URL individually so one failure doesn't block the rest
+      return Promise.allSettled(STATIC.map(url => cache.add(url)));
+    }).then(() => self.skipWaiting())
+  );
 });
 
-// ── Activate: clean up old caches ──────────────────────────────────────────
-self.addEventListener('activate', (event) => {
+// ── Activate: clean up old caches ─────────────────────────────────────────
+self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
-      )
-    )
+      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// ── Fetch ───────────────────────────────────────────────────────────────────
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  const url = request.url;
+// ── Fetch: cache-first for static, network-only for Firebase ──────────────
+self.addEventListener('fetch', event => {
+  const url = new URL(event.request.url);
 
-  // Only handle GET requests
-  if (request.method !== 'GET') return;
-
-  // CDN assets: cache-first (they are versioned and won't change)
-  const isCdn = CDN_ASSETS.some(cdn => url.startsWith(cdn));
-  if (isCdn) {
-    event.respondWith(
-      caches.match(request).then(cached => {
-        if (cached) return cached;
-        return fetch(request).then(res => {
-          if (res.ok) caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
-          return res;
-        }).catch(() => caches.match(request));
-      })
-    );
+  // Always go to network for Firebase and other dynamic origins
+  if (NETWORK_ONLY.some(origin => url.hostname.includes(origin))) {
+    event.respondWith(fetch(event.request));
     return;
   }
 
-  // version.json: network-first, short timeout, fall back to cache
-  // (so update banner appears quickly but works offline too)
-  if (url.includes('version.json')) {
-    event.respondWith(
-      Promise.race([
-        fetch(request).then(res => {
-          if (res.ok) caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
-          return res;
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
-      ]).catch(() => caches.match(request))
-    );
+  // Only handle GET requests for caching
+  if (event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request));
     return;
   }
 
-  // Local origin files: network-first, fall back to cache for offline
-  if (url.startsWith(self.location.origin)) {
-    event.respondWith(
-      fetch(request)
-        .then(res => {
-          if (res.ok) caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
-          return res;
-        })
-        .catch(() => caches.match(request))
-    );
-  }
+  // Cache-first strategy: serve from cache, fall back to network
+  event.respondWith(
+    caches.open(CACHE).then(async cache => {
+      const cached = await cache.match(event.request);
+      if (cached) return cached;
+
+      try {
+        const networkResponse = await fetch(event.request);
+
+        // Only cache valid responses — clone BEFORE reading body
+        if (networkResponse && networkResponse.status === 200 && networkResponse.type !== 'opaque') {
+          const toCache = networkResponse.clone(); // clone first, return original
+          cache.put(event.request, toCache);       // cache the clone
+        }
+
+        return networkResponse; // return the original (body still intact)
+      } catch (err) {
+        // Offline and not cached — return a simple offline response
+        return new Response('Offline — open SpendWise while connected to cache it.', {
+          status: 503,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
+    })
+  );
 });
