@@ -597,7 +597,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.9.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.9.1</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -749,6 +749,40 @@
                 setExporting(false);
             };
 
+            const handleExportAudioOnly = async () => {
+                setExporting(true);
+                try {
+                    const audioEntries = await getAllAudioEntries();
+                    const audioKeys = Object.keys(audioEntries);
+                    // Only include words that have at least one audio recording
+                    const wordsWithAudio = words.filter(w =>
+                        audioKeys.some(k => k.startsWith(w.id + '_'))
+                    );
+                    const audioWithHashes = {};
+                    for (const key of audioKeys) {
+                        const blob = audioEntries[key];
+                        const base64 = await blobToBase64(blob);
+                        const hash = await hashString(base64);
+                        audioWithHashes[key] = { data: base64, hash };
+                    }
+                    const currentVersion = localStorage.getItem('ll_words_version') || '0.0.0';
+                    const exportData = {
+                        words: wordsWithAudio,
+                        audio: audioWithHashes,
+                        version: currentVersion,
+                        timestamp: new Date().toISOString(),
+                        exportType: 'audio-only'
+                    };
+                    const blob = new Blob([JSON.stringify(exportData)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'words-with-audio.json';
+                    a.click();
+                } catch (e) { alert('Export failed: ' + e.message); }
+                setExporting(false);
+            };
+
             const handleRestore = (e) => {
                 const file = e.target.files[0]; if (!file) return;
                 const reader = new FileReader();
@@ -779,6 +813,22 @@
                     } catch (err) { alert('Error reading backup: ' + err.message); }
                 };
                 reader.readAsText(file);
+            };
+
+            const handleHardRefresh = async () => {
+                try {
+                    if ('serviceWorker' in navigator) {
+                        const registrations = await navigator.serviceWorker.getRegistrations();
+                        for (const reg of registrations) {
+                            await reg.unregister();
+                        }
+                    }
+                    if ('caches' in window) {
+                        const keys = await caches.keys();
+                        await Promise.all(keys.map(k => caches.delete(k)));
+                    }
+                } catch(e) { console.error(e); }
+                window.location.reload(true);
             };
 
             const handleReset = async () => { 
@@ -815,6 +865,10 @@
                                     <button onClick={handleBackup} disabled={exporting} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Backup'}</button>
                                     <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
                                     <button onClick={handleReset} className="bg-red-50 text-red-600 p-2 rounded-lg border border-red-100 font-bold hover:bg-red-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Reset</button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 mt-2">
+                                    <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'Export Words w/ Audio'}</button>
+                                    <button onClick={handleHardRefresh} className="bg-orange-50 text-orange-600 p-2 rounded-lg border border-orange-100 font-bold hover:bg-orange-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Hard Refresh</button>
                                 </div>
                             </div>
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
