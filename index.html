@@ -597,7 +597,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.9.1</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.10.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1112,6 +1112,10 @@
                                 <span className="text-8xl block mb-4 drop-shadow-md">🎮</span>
                                 <span className={`text-3xl font-black ${theme.accentText}`}>Play Game</span>
                             </button>
+                            <button onClick={() => setView('stories')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-yellow-100">
+                                <span className="text-8xl block mb-4 drop-shadow-md">📖</span>
+                                <span className="text-3xl font-black text-yellow-500">Story Time</span>
+                            </button>
                         </div>
                         <button onClick={() => setMode('landing')} className="text-gray-400 font-bold mt-4 self-center">← Back to Home</button>
                     </div>
@@ -1167,6 +1171,7 @@
             if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} />;
             if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_listen')} theme={theme} />;
             if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
+            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={() => setView('menu')} theme={theme} />;
             return null;
         };
 
@@ -1485,6 +1490,607 @@
                      </div>
                  </div>
              );
+        };
+
+        // --- STORIES DATA ---
+        // Each story page has: text (English with {word_id} tokens), scene (SVG scene key), nativeKey (word id for native audio)
+        // Tokens like {1} in text get replaced with the native word and trigger native audio playback
+
+        const STORIES = [
+            {
+                id: 'farm_day',
+                title: 'A Day on the Farm',
+                emoji: '🐄',
+                color: '#16a34a',
+                shadow: '#14532d',
+                pages: [
+                    { text: 'Early in the morning, the sun came up over the farm.', scene: 'farm_sun', nativeWords: [{ id: '188', role: 'sun' }] },
+                    { text: 'A little {dog} ran across the yard, barking at everyone.', scene: 'farm_dog', nativeWords: [{ id: '1', role: 'dog' }] },
+                    { text: 'The {cat} stretched and yawned on the warm doorstep.', scene: 'farm_cat', nativeWords: [{ id: '2', role: 'cat' }] },
+                    { text: 'A big {cow} walked slowly through the green grass.', scene: 'farm_cow', nativeWords: [{ id: '3', role: 'cow' }] },
+                    { text: 'The {chicken} pecked at seeds on the ground. Peck, peck, peck!', scene: 'farm_chicken', nativeWords: [{ id: '28', role: 'chicken' }] },
+                    { text: 'A fluffy {goat} climbed up on the old wooden fence.', scene: 'farm_goat', nativeWords: [{ id: '7', role: 'goat' }] },
+                    { text: 'When the sun went down, all the animals went to {sleep}.', scene: 'farm_night', nativeWords: [{ id: '239', role: 'sleep' }] },
+                    { text: 'What a wonderful day on the farm! Goodnight, everyone!', scene: 'farm_end', nativeWords: [] },
+                ]
+            },
+            {
+                id: 'breakfast',
+                title: 'Breakfast Time!',
+                emoji: '🍳',
+                color: '#d97706',
+                shadow: '#92400e',
+                pages: [
+                    { text: 'Good morning! Time to {wake} up and have breakfast!', scene: 'bfast_wake', nativeWords: [{ id: '240', role: 'wake' }] },
+                    { text: 'First, go and {wash your hands}. Clean hands are happy hands!', scene: 'bfast_wash', nativeWords: [{ id: '340', role: 'wash your hands' }] },
+                    { text: 'Mama put a {plate} on the table with a big smile.', scene: 'bfast_plate', nativeWords: [{ id: '108', role: 'plate' }] },
+                    { text: 'There was a {banana} and a piece of {bread} on the plate.', scene: 'bfast_food', nativeWords: [{ id: '57', role: 'banana' }, { id: '70', role: 'bread' }] },
+                    { text: 'Papa cracked open an {egg} and cooked it in the pan.', scene: 'bfast_egg', nativeWords: [{ id: '73', role: 'egg' }] },
+                    { text: 'Baby drank a big cup of {milk}. Yummy!', scene: 'bfast_milk', nativeWords: [{ id: '74', role: 'milk' }] },
+                    { text: 'Everyone had a glass of cold {water} too.', scene: 'bfast_water', nativeWords: [{ id: '86', role: 'water' }] },
+                    { text: 'What a delicious breakfast! Now let us play!', scene: 'bfast_end', nativeWords: [] },
+                ]
+            },
+            {
+                id: 'big_storm',
+                title: 'The Big Storm',
+                emoji: '⛈️',
+                color: '#4f46e5',
+                shadow: '#312e81',
+                pages: [
+                    { text: 'It was a normal afternoon when dark {clouds} filled the sky.', scene: 'storm_clouds', nativeWords: [{ id: '191', role: 'clouds' }] },
+                    { text: 'The {wind} began to blow harder and harder!', scene: 'storm_wind', nativeWords: [{ id: '195', role: 'wind' }] },
+                    { text: 'Big drops of {rain} started to fall from the sky.', scene: 'storm_rain', nativeWords: [{ id: '194', role: 'rain' }] },
+                    { text: 'BOOM! {Thunder} shook the whole house!', scene: 'storm_thunder', nativeWords: [{ id: '200', role: 'thunder' }] },
+                    { text: 'The little one felt {scared} and hid under the blanket.', scene: 'storm_scared', nativeWords: [{ id: '304', role: 'scared' }] },
+                    { text: 'Mama said "Come here!" and gave a big warm hug.', scene: 'storm_hug', nativeWords: [{ id: '344', role: 'come here' }] },
+                    { text: 'Soon the storm passed and a beautiful {rainbow} appeared!', scene: 'storm_rainbow', nativeWords: [{ id: '193', role: 'rainbow' }] },
+                    { text: 'The little one felt so {happy} again. Storms always end!', scene: 'storm_happy', nativeWords: [{ id: '301', role: 'happy' }] },
+                ]
+            }
+        ];
+
+        // --- SVG SCENES ---
+        const StoryScene = ({ sceneKey }) => {
+            const scenes = {
+                farm_sun: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#87CEEB"/>
+                        <rect y="140" width="300" height="60" fill="#5D8A3C"/>
+                        <circle cx="150" cy="50" r="35" fill="#FFD700" opacity="0.95"/>
+                        {[0,45,90,135,180,225,270,315].map((a,i) => (
+                            <line key={i} x1={150+42*Math.cos(a*Math.PI/180)} y1={50+42*Math.sin(a*Math.PI/180)} x2={150+58*Math.cos(a*Math.PI/180)} y2={50+58*Math.sin(a*Math.PI/180)} stroke="#FFD700" strokeWidth="3"/>
+                        ))}
+                        <rect x="60" y="90" width="80" height="55" fill="#D2691E" rx="4"/>
+                        <polygon points="60,90 100,60 140,90" fill="#8B0000"/>
+                        <rect x="85" y="115" width="20" height="30" fill="#4a2c12"/>
+                        <rect x="175" y="110" width="70" height="40" fill="#A0522D" rx="3"/>
+                        <polygon points="175,110 210,85 245,110" fill="#6B3A2A"/>
+                    </svg>
+                ),
+                farm_dog: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#87CEEB"/>
+                        <rect y="150" width="300" height="50" fill="#5D8A3C"/>
+                        <ellipse cx="150" cy="155" rx="30" ry="12" fill="#C8A96E"/>
+                        <circle cx="150" cy="130" r="22" fill="#C8A96E"/>
+                        <ellipse cx="136" cy="122" rx="8" ry="12" fill="#A0784A"/>
+                        <ellipse cx="164" cy="122" rx="8" ry="12" fill="#A0784A"/>
+                        <circle cx="143" cy="133" r="3" fill="#333"/>
+                        <circle cx="157" cy="133" r="3" fill="#333"/>
+                        <ellipse cx="150" cy="140" rx="7" ry="5" fill="#cc6644"/>
+                        <rect x="130" y="155" width="10" height="20" fill="#C8A96E" rx="3"/>
+                        <rect x="155" y="155" width="10" height="20" fill="#C8A96E" rx="3"/>
+                        <path d="M170 148 Q195 140 190 155" fill="none" stroke="#C8A96E" strokeWidth="6" strokeLinecap="round"/>
+                        <text x="150" y="20" textAnchor="middle" fontSize="14" fill="#333" fontWeight="bold">Woof! Woof!</text>
+                    </svg>
+                ),
+                farm_cat: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFF8DC"/>
+                        <rect y="160" width="300" height="40" fill="#8B7355"/>
+                        <rect x="90" y="140" width="120" height="25" fill="#A0896B" rx="4"/>
+                        <ellipse cx="150" cy="155" rx="28" ry="12" fill="#FFA07A"/>
+                        <circle cx="150" cy="125" r="24" fill="#FFA07A"/>
+                        <polygon points="132,108 126,88 144,104" fill="#FFA07A"/>
+                        <polygon points="168,108 174,88 156,104" fill="#FFA07A"/>
+                        <polygon points="134,108 128,92 143,106" fill="#FF8C6A"/>
+                        <polygon points="166,108 172,92 157,106" fill="#FF8C6A"/>
+                        <ellipse cx="142" cy="128" rx="5" ry="7" fill="#333"/>
+                        <ellipse cx="158" cy="128" rx="5" ry="7" fill="#333"/>
+                        <circle cx="143" cy="127" r="2" fill="white"/>
+                        <circle cx="159" cy="127" r="2" fill="white"/>
+                        <ellipse cx="150" cy="136" rx="5" ry="4" fill="#FF6B88"/>
+                        <text x="150" y="20" textAnchor="middle" fontSize="14" fill="#555" fontWeight="bold">Purrrr...</text>
+                    </svg>
+                ),
+                farm_cow: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#90EE90"/>
+                        <rect y="155" width="300" height="45" fill="#3A7D2C"/>
+                        <ellipse cx="150" cy="145" rx="60" ry="35" fill="white"/>
+                        <ellipse cx="50" cy="60" rx="18" ry="22" fill="#D2691E" opacity="0.4"/>
+                        <ellipse cx="240" cy="70" rx="14" ry="18" fill="#D2691E" opacity="0.3"/>
+                        <circle cx="150" cy="100" r="28" fill="white"/>
+                        <circle cx="135" cy="93" r="8" fill="#D2B48C"/>
+                        <circle cx="165" cy="93" r="8" fill="#D2B48C"/>
+                        <circle cx="135" cy="95" r="4" fill="#333"/>
+                        <circle cx="165" cy="95" r="4" fill="#333"/>
+                        <ellipse cx="150" cy="110" rx="8" ry="6" fill="#FFB6C1"/>
+                        <circle cx="125" cy="80" r="9" fill="white"/>
+                        <circle cx="175" cy="80" r="9" fill="white"/>
+                        <circle cx="125" cy="80" r="4" fill="#444"/>
+                        <circle cx="175" cy="80" r="4" fill="#444"/>
+                        <rect x="120" y="175" width="12" height="20" fill="#DDD" rx="2"/>
+                        <rect x="168" y="175" width="12" height="20" fill="#DDD" rx="2"/>
+                        <text x="150" y="22" textAnchor="middle" fontSize="14" fill="#555" fontWeight="bold">Mooooo!</text>
+                    </svg>
+                ),
+                farm_chicken: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#F5DEB3"/>
+                        <rect y="158" width="300" height="42" fill="#8B7355"/>
+                        {[0,1,2,3,4,5,6,7,8].map(i => (
+                            <circle key={i} cx={60+i*22} cy="165" r="3" fill="#D2B48C"/>
+                        ))}
+                        <ellipse cx="150" cy="148" rx="30" ry="20" fill="#F4A460"/>
+                        <circle cx="150" cy="118" r="20" fill="#F4A460"/>
+                        <polygon points="148,108 152,108 150,100" fill="#FF6600"/>
+                        <polygon points="140,105 136,100 144,100" fill="#FF4500"/>
+                        <circle cx="143" cy="116" r="4" fill="#333"/>
+                        <circle cx="157" cy="116" r="4" fill="#333"/>
+                        <circle cx="144" cy="115" r="1.5" fill="white"/>
+                        <circle cx="158" cy="115" r="1.5" fill="white"/>
+                        <polygon points="135,160 145,160 140,175" fill="#FF8C00"/>
+                        <polygon points="155,160 165,160 160,175" fill="#FF8C00"/>
+                        <text x="150" y="20" textAnchor="middle" fontSize="14" fill="#555" fontWeight="bold">Cluck cluck!</text>
+                    </svg>
+                ),
+                farm_goat: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#90EE90"/>
+                        <rect y="155" width="300" height="45" fill="#3A7D2C"/>
+                        <rect x="80" y="100" width="180" height="15" fill="#8B7355" rx="3"/>
+                        <rect x="80" y="95" width="8" height="60" fill="#6B5B45" rx="2"/>
+                        <rect x="248" y="95" width="8" height="60" fill="#6B5B45" rx="2"/>
+                        <ellipse cx="155" cy="130" rx="38" ry="22" fill="#DDD"/>
+                        <circle cx="155" cy="102" r="20" fill="#DDD"/>
+                        <line x1="148" y1="84" x2="144" y2="68" stroke="#DDD" strokeWidth="5" strokeLinecap="round"/>
+                        <line x1="162" y1="84" x2="166" y2="68" stroke="#DDD" strokeWidth="5" strokeLinecap="round"/>
+                        <circle cx="143" cy="65" r="5" fill="#333"/>
+                        <circle cx="167" cy="65" r="5" fill="#333"/>
+                        <ellipse cx="148" cy="108" rx="4" ry="5" fill="#333"/>
+                        <ellipse cx="162" cy="108" rx="4" ry="5" fill="#333"/>
+                        <ellipse cx="155" cy="116" rx="5" ry="4" fill="#FFB6C1"/>
+                        <text x="150" y="20" textAnchor="middle" fontSize="14" fill="#555" fontWeight="bold">Meeeeh!</text>
+                    </svg>
+                ),
+                farm_night: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#1a1a3e"/>
+                        <rect y="148" width="300" height="52" fill="#1a3a1a"/>
+                        <circle cx="240" cy="40" r="22" fill="#FFFACD"/>
+                        <circle cx="252" cy="32" r="18" fill="#1a1a3e"/>
+                        {[[30,25],[80,15],[130,35],[200,20],[60,50],[170,45]].map(([x,y],i) => (
+                            <circle key={i} cx={x} cy={y} r="2" fill="white" opacity="0.8"/>
+                        ))}
+                        <rect x="80" y="100" width="70" height="52" fill="#2D3A1E" rx="3"/>
+                        <polygon points="80,100 115,75 150,100" fill="#1a2a10"/>
+                        <rect x="100" y="125" width="15" height="27" fill="#1a2510"/>
+                        <rect x="170" y="115" width="60" height="40" fill="#2D3A1E" rx="3"/>
+                        <polygon points="170,115 200,92 230,115" fill="#1a2a10"/>
+                        <circle cx="90" cy="162" r="8" fill="#2a4a2a"/>
+                        <circle cx="135" cy="158" r="12" fill="#2a4a2a"/>
+                        <circle cx="210" cy="160" r="10" fill="#2a4a2a"/>
+                        <text x="150" y="185" textAnchor="middle" fontSize="12" fill="#FFFACD" fontWeight="bold">Zzzzzz...</text>
+                    </svg>
+                ),
+                farm_end: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFE4B5"/>
+                        <rect y="150" width="300" height="50" fill="#5D8A3C"/>
+                        <circle cx="150" cy="55" r="38" fill="#FFD700" opacity="0.9"/>
+                        {['🐄','🐔','🐐','🐶','🐱'].map((e,i) => (
+                            <text key={i} x={50+i*50} y="165" fontSize="28" textAnchor="middle">{e}</text>
+                        ))}
+                        <text x="150" y="22" textAnchor="middle" fontSize="15" fill="#7B3F00" fontWeight="bold">The End!</text>
+                        <text x="150" y="115" textAnchor="middle" fontSize="12" fill="#7B3F00">Sweet dreams, farm friends!</text>
+                    </svg>
+                ),
+                bfast_wake: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFF8E7"/>
+                        <rect x="50" y="100" width="200" height="80" fill="#8B6914" rx="8"/>
+                        <rect x="50" y="90" width="200" height="20" fill="#A0784A" rx="4"/>
+                        <rect x="60" y="110" width="180" height="55" fill="#FAFAD2" rx="4"/>
+                        <ellipse cx="150" cy="110" rx="35" ry="28" fill="#FFDAB9"/>
+                        <circle cx="140" cy="104" r="4" fill="#333"/>
+                        <circle cx="160" cy="104" r="4" fill="#333"/>
+                        <path d="M140 115 Q150 122 160 115" fill="none" stroke="#333" strokeWidth="2"/>
+                        <circle cx="235" cy="60" r="25" fill="#FFD700" opacity="0.9"/>
+                        {[0,60,120,180,240,300].map((a,i) => (
+                            <line key={i} x1={235+30*Math.cos(a*Math.PI/180)} y1={60+30*Math.sin(a*Math.PI/180)} x2={235+42*Math.cos(a*Math.PI/180)} y2={60+42*Math.sin(a*Math.PI/180)} stroke="#FFD700" strokeWidth="3"/>
+                        ))}
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#B8860B" fontWeight="bold">Good Morning! ☀️</text>
+                    </svg>
+                ),
+                bfast_wash: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#E0F7FA"/>
+                        <rect x="90" y="120" width="120" height="60" rx="8" fill="#B0BEC5"/>
+                        <rect x="95" y="125" width="110" height="50" rx="5" fill="#E3F2FD"/>
+                        <rect x="140" y="100" width="10" height="28" fill="#78909C"/>
+                        <circle cx="145" cy="100" r="7" fill="#90A4AE"/>
+                        {[[120,80],[145,65],[170,78],[130,50],[160,55]].map(([x,y],i) => (
+                            <ellipse key={i} cx={x} cy={y} rx="5" ry="8" fill="#80DEEA" opacity="0.7" transform={`rotate(${i*15-15},${x},${y})`}/>
+                        ))}
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#006064" fontWeight="bold">Wash, wash, wash!</text>
+                        <text x="150" y="185" textAnchor="middle" fontSize="11" fill="#006064">Splish splash!</text>
+                    </svg>
+                ),
+                bfast_plate: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFFDE7"/>
+                        <rect x="70" y="130" width="160" height="8" rx="3" fill="#8D6E63"/>
+                        <ellipse cx="150" cy="135" rx="80" ry="8" fill="#A1887F"/>
+                        <circle cx="150" cy="115" r="65" fill="white"/>
+                        <circle cx="150" cy="115" r="60" fill="#F5F5F5"/>
+                        <circle cx="150" cy="115" r="45" fill="white"/>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#5D4037" fontWeight="bold">Breakfast is ready!</text>
+                        <text x="150" y="120" textAnchor="middle" fontSize="36">🍽️</text>
+                    </svg>
+                ),
+                bfast_food: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFFDE7"/>
+                        <circle cx="150" cy="120" r="70" fill="white"/>
+                        <circle cx="150" cy="120" r="65" fill="#FAFAFA"/>
+                        <text x="115" y="130" fontSize="44" textAnchor="middle">🍌</text>
+                        <text x="185" y="130" fontSize="44" textAnchor="middle">🍞</text>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#5D4037" fontWeight="bold">Yummy yummy!</text>
+                    </svg>
+                ),
+                bfast_egg: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFF8E1"/>
+                        <ellipse cx="150" cy="155" rx="65" ry="15" fill="#C8966C" opacity="0.3"/>
+                        <ellipse cx="210" cy="140" rx="55" ry="12" fill="#B87333" opacity="0.4"/>
+                        <rect x="90" y="130" width="120" height="8" rx="2" fill="#B87333"/>
+                        <ellipse cx="150" cy="128" rx="60" ry="10" fill="#C8966C"/>
+                        <ellipse cx="150" cy="118" rx="45" ry="22" fill="#FFF9C4"/>
+                        <circle cx="150" cy="112" r="18" fill="#FFD700"/>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#5D4037" fontWeight="bold">Crack! Sizzle! 🥚</text>
+                    </svg>
+                ),
+                bfast_milk: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#F0F8FF"/>
+                        <rect x="120" y="70" width="60" height="100" rx="12" fill="white"/>
+                        <rect x="120" y="70" width="60" height="30" rx="8" fill="#E3F2FD"/>
+                        <rect x="128" y="58" width="44" height="18" rx="4" fill="#BBDEFB"/>
+                        <rect x="140" y="46" width="20" height="14" rx="3" fill="#90CAF9"/>
+                        <rect x="122" y="72" width="56" height="85" rx="8" fill="white" opacity="0.7"/>
+                        <ellipse cx="150" cy="72" rx="28" ry="8" fill="#E3F2FD"/>
+                        <text x="145" y="125" fontSize="10" fill="#1565C0" fontWeight="bold" textAnchor="middle">MILK</text>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#1565C0" fontWeight="bold">Mmm, cold milk! 🥛</text>
+                    </svg>
+                ),
+                bfast_water: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#E3F2FD"/>
+                        <rect x="115" y="75" width="70" height="105" rx="10" fill="#B3E5FC" opacity="0.6"/>
+                        <rect x="115" y="75" width="70" height="105" rx="10" fill="none" stroke="#0288D1" strokeWidth="3"/>
+                        <rect x="118" y="120" width="64" height="58" rx="8" fill="#0288D1" opacity="0.4"/>
+                        <rect x="108" y="65" width="84" height="16" rx="5" fill="#0288D1" opacity="0.5"/>
+                        {[[130,95],[155,85],[165,105]].map(([x,y],i) => (
+                            <ellipse key={i} cx={x} cy={y} rx="4" ry="7" fill="white" opacity="0.5" transform={`rotate(${i*10-10},${x},${y})`}/>
+                        ))}
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#01579B" fontWeight="bold">Nice cold water! 💧</text>
+                    </svg>
+                ),
+                bfast_end: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#FFF9C4"/>
+                        <text x="150" y="80" textAnchor="middle" fontSize="60">😋</text>
+                        {['⭐','🌟','✨','💫'].map((s,i) => (
+                            <text key={i} x={[60,240,80,220][i]} y={[60,60,140,140][i]} fontSize="24" textAnchor="middle">{s}</text>
+                        ))}
+                        <text x="150" y="130" textAnchor="middle" fontSize="15" fill="#5D4037" fontWeight="bold">Delicious!</text>
+                        <text x="150" y="160" textAnchor="middle" fontSize="12" fill="#795548">Now let's go and play!</text>
+                        <text x="150" y="185" textAnchor="middle" fontSize="12" fill="#795548">The End! 🎉</text>
+                    </svg>
+                ),
+                storm_clouds: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#708090"/>
+                        <rect y="155" width="300" height="45" fill="#3D5A3E"/>
+                        <rect x="70" y="110" width="80" height="50" fill="#5A7A5C" rx="3"/>
+                        <polygon points="70,110 110,82 150,110" fill="#3D5A3E"/>
+                        <rect x="88" y="132" width="15" height="28" fill="#2A4A2A"/>
+                        <ellipse cx="80" cy="55" rx="35" ry="25" fill="#555"/>
+                        <ellipse cx="110" cy="45" rx="42" ry="30" fill="#666"/>
+                        <ellipse cx="150" cy="50" rx="38" ry="28" fill="#777"/>
+                        <ellipse cx="185" cy="45" rx="40" ry="27" fill="#666"/>
+                        <ellipse cx="220" cy="58" rx="35" ry="23" fill="#555"/>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#EEE" fontWeight="bold">Dark clouds are coming...</text>
+                    </svg>
+                ),
+                storm_wind: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#9BA8B5"/>
+                        <rect y="155" width="300" height="45" fill="#3D5A3E"/>
+                        {[60,90,120,150].map((y,i) => (
+                            <path key={i} d={`M 10 ${y} Q 80 ${y-20} 160 ${y} Q 240 ${y+20} 290 ${y}`} fill="none" stroke="white" strokeWidth="3" opacity={0.6-i*0.1}/>
+                        ))}
+                        <text x="220" y="90" fontSize="40" textAnchor="middle">🌳</text>
+                        <text x="80" y="90" fontSize="35" textAnchor="middle" style={{transform: 'rotate(-20deg)', transformOrigin: '80px 90px'}}>🌳</text>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#EEE" fontWeight="bold">Whoooosh! The wind blows!</text>
+                    </svg>
+                ),
+                storm_rain: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#607B8B"/>
+                        <rect y="155" width="300" height="45" fill="#3D5A3E"/>
+                        <ellipse cx="150" cy="38" rx="120" ry="28" fill="#555"/>
+                        {Array.from({length: 30}, (_,i) => (
+                            <line key={i} x1={10+i*10} y1={60+Math.random()*20} x2={5+i*10} y2={85+Math.random()*20} stroke="#ADD8E6" strokeWidth="2" opacity="0.8"/>
+                        ))}
+                        <rect x="80" y="110" width="70" height="48" fill="#4A6A4C" rx="3"/>
+                        <polygon points="80,110 115,85 150,110" fill="#2A4A2A"/>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#ADD8E6" fontWeight="bold">Drip! Drop! Drip!</text>
+                    </svg>
+                ),
+                storm_thunder: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#1C2833"/>
+                        <rect y="158" width="300" height="42" fill="#1A2E1A"/>
+                        <ellipse cx="150" cy="38" rx="130" ry="32" fill="#2C3E50"/>
+                        <polygon points="160,55 140,100 158,100 138,150 175,88 155,88" fill="#FFD700" opacity="0.95"/>
+                        <rect x="0" y="0" width="300" height="200" fill="white" opacity="0.07"/>
+                        {Array.from({length: 20}, (_,i) => (
+                            <line key={i} x1={5+i*15} y1={65} x2={i%2===0?i*15:8+i*15} y2={90} stroke="#ADD8E6" strokeWidth="1.5" opacity="0.5"/>
+                        ))}
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#FFD700" fontWeight="bold">BOOM! CRASH! ⚡</text>
+                    </svg>
+                ),
+                storm_scared: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#2C3E50"/>
+                        <rect x="60" y="80" width="180" height="110" rx="8" fill="#A0784A"/>
+                        <rect x="65" y="110" width="170" height="75" rx="4" fill="#FAFAD2"/>
+                        <ellipse cx="150" cy="145" rx="40" ry="30" fill="#FFDAB9"/>
+                        <ellipse cx="150" cy="108" rx="38" ry="25" fill="#87CEEB" opacity="0.8"/>
+                        <circle cx="138" cy="140" r="5" fill="#333"/>
+                        <circle cx="162" cy="140" r="5" fill="#333"/>
+                        <path d="M138 152 Q150 148 162 152" fill="none" stroke="#333" strokeWidth="2"/>
+                        <text x="95" y="40" fontSize="28" textAnchor="middle">⚡</text>
+                        <text x="205" y="55" fontSize="22" textAnchor="middle">💨</text>
+                        <text x="150" y="22" textAnchor="middle" fontSize="12" fill="#ADD8E6" fontWeight="bold">Under the blanket!</text>
+                    </svg>
+                ),
+                storm_hug: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#2C3E50"/>
+                        <rect y="158" width="300" height="42" fill="#1A2E1A"/>
+                        <ellipse cx="150" cy="145" rx="55" ry="30" fill="#C8966C"/>
+                        <circle cx="130" cy="110" r="24" fill="#FFDAB9"/>
+                        <circle cx="170" cy="118" r="18" fill="#FFDAB9"/>
+                        <ellipse cx="150" cy="140" rx="40" ry="22" fill="#C8966C" opacity="0.5"/>
+                        <path d="M110 130 Q130 115 150 130 Q130 145 110 130" fill="#E8A87C"/>
+                        <circle cx="124" cy="107" r="4" fill="#333"/>
+                        <circle cx="136" cy="107" r="4" fill="#333"/>
+                        <path d="M120 118 Q130 124 140 118" fill="none" stroke="#cc5566" strokeWidth="2"/>
+                        <circle cx="164" cy="115" r="3" fill="#333"/>
+                        <circle cx="175" cy="115" r="3" fill="#333"/>
+                        <text x="150" y="20" textAnchor="middle" fontSize="13" fill="#FFD700" fontWeight="bold">A big warm hug! 🤗</text>
+                        <text x="150" y="185" textAnchor="middle" fontSize="22">❤️</text>
+                    </svg>
+                ),
+                storm_rainbow: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#87CEEB"/>
+                        <rect y="155" width="300" height="45" fill="#5D8A3C"/>
+                        {['#FF0000','#FF8C00','#FFD700','#008000','#0000FF','#8B00FF'].map((c,i) => (
+                            <path key={i} d={`M ${20-i*5} 160 Q 150 ${40+i*12} ${280+i*5} 160`} fill="none" stroke={c} strokeWidth="7" opacity="0.85"/>
+                        ))}
+                        <circle cx="255" cy="55" r="28" fill="#FFD700" opacity="0.9"/>
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#444" fontWeight="bold">Look! A rainbow! 🌈</text>
+                    </svg>
+                ),
+                storm_happy: (
+                    <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="200" fill="#87CEEB"/>
+                        <rect y="155" width="300" height="45" fill="#5D8A3C"/>
+                        {['#FF0000','#FF8C00','#FFD700','#008000','#0000FF','#8B00FF'].map((c,i) => (
+                            <path key={i} d={`M ${20-i*5} 160 Q 150 ${50+i*12} ${280+i*5} 160`} fill="none" stroke={c} strokeWidth="5" opacity="0.6"/>
+                        ))}
+                        <circle cx="150" cy="100" r="35" fill="#FFDAB9"/>
+                        <circle cx="138" cy="93" r="5" fill="#333"/>
+                        <circle cx="162" cy="93" r="5" fill="#333"/>
+                        <circle cx="139" cy="92" r="2" fill="white"/>
+                        <circle cx="163" cy="92" r="2" fill="white"/>
+                        <path d="M136 108 Q150 120 164 108" fill="none" stroke="#cc3344" strokeWidth="3"/>
+                        {['⭐','🌟','✨','💫','⭐'].map((s,i) => (
+                            <text key={i} x={30+i*60} y={[45,65,40,65,45][i]} fontSize="18" textAnchor="middle">{s}</text>
+                        ))}
+                        <text x="150" y="22" textAnchor="middle" fontSize="13" fill="#333" fontWeight="bold">Happy again! 😊</text>
+                    </svg>
+                ),
+            };
+            return scenes[sceneKey] || (
+                <svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="300" height="200" fill="#f0f0f0"/>
+                    <text x="150" y="105" textAnchor="middle" fontSize="60">📖</text>
+                </svg>
+            );
+        };
+
+        // --- STORY SHELF ---
+        const StoryShelf = ({ lang, words, playAudio, onBack, theme }) => {
+            const [activeStory, setActiveStory] = useState(null);
+            if (activeStory) {
+                return <StoryReader story={activeStory} lang={lang} words={words} playAudio={playAudio} onBack={() => setActiveStory(null)} theme={theme} />;
+            }
+            return (
+                <div className="p-4 max-w-2xl mx-auto animate-pop">
+                    <div className="flex items-center gap-4 mb-6">
+                        <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 text-2xl">🏠</button>
+                        <h2 className="text-3xl font-black text-gray-700">Story Time 📖</h2>
+                    </div>
+                    <p className="text-gray-500 font-bold mb-5 text-center">
+                        {lang === 'yoruba' ? 'Yoruba' : 'Gungbe'} words will play in your voice!
+                    </p>
+                    <div className="grid grid-cols-1 gap-5">
+                        {STORIES.map(story => (
+                            <button key={story.id} onClick={() => setActiveStory(story)}
+                                className="bg-white rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all overflow-hidden flex items-center gap-5 p-5 border-b-8"
+                                style={{borderColor: story.shadow}}>
+                                <div className="w-20 h-20 rounded-2xl flex items-center justify-center text-5xl shrink-0 shadow-md"
+                                    style={{background: story.color}}>
+                                    {story.emoji}
+                                </div>
+                                <div className="text-left">
+                                    <div className="font-black text-gray-800 text-xl mb-1">{story.title}</div>
+                                    <div className="text-sm text-gray-500 font-medium">{story.pages.length} pages</div>
+                                    <div className="text-xs text-gray-400 mt-1">
+                                        {lang === 'yoruba' ? 'Yoruba' : 'Gungbe'} words included
+                                    </div>
+                                </div>
+                                <div className="ml-auto text-3xl">▶️</div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- STORY READER ---
+        const StoryReader = ({ story, lang, words, playAudio, onBack, theme }) => {
+            const [pageIndex, setPageIndex] = useState(0);
+            const [highlighted, setHighlighted] = useState(null);
+            const page = story.pages[pageIndex];
+            const isLast = pageIndex === story.pages.length - 1;
+
+            // Build word lookup: id -> native text
+            const wordMap = {};
+            words.forEach(w => { wordMap[w.id] = w; });
+
+            // Auto-play native words on page load
+            useEffect(() => {
+                setHighlighted(null);
+                if (page.nativeWords.length > 0) {
+                    const timer = setTimeout(() => {
+                        page.nativeWords.forEach((nw, i) => {
+                            setTimeout(() => {
+                                playAudio(nw.id, lang);
+                                setHighlighted(nw.id);
+                                setTimeout(() => setHighlighted(null), 1200);
+                            }, i * 1400);
+                        });
+                    }, 600);
+                    return () => clearTimeout(timer);
+                }
+            }, [pageIndex]);
+
+            // Render page text with native word highlights
+            const renderText = () => {
+                let text = page.text;
+                const parts = [];
+                let lastIndex = 0;
+                const nativePattern = /\{([^}]+)\}/g;
+                let match;
+                let partIndex = 0;
+                while ((match = nativePattern.exec(text)) !== null) {
+                    if (match.index > lastIndex) {
+                        parts.push(<span key={partIndex++}>{text.slice(lastIndex, match.index)}</span>);
+                    }
+                    const roleName = match[1];
+                    const nw = page.nativeWords.find(n => n.role === roleName);
+                    const nativeText = nw && wordMap[nw.id] ? (lang === 'yoruba' ? wordMap[nw.id].yoruba : wordMap[nw.id].gungbe) : roleName;
+                    const isHighlighted = nw && highlighted === nw.id;
+                    parts.push(
+                        <span key={partIndex++}
+                            onClick={() => nw && playAudio(nw.id, lang)}
+                            className="cursor-pointer font-black rounded-lg px-1 transition-all"
+                            style={{
+                                background: isHighlighted ? '#FFD700' : '#FFF9C4',
+                                color: isHighlighted ? '#7B3F00' : '#B8860B',
+                                boxShadow: isHighlighted ? '0 0 0 3px #FFD700' : 'none',
+                                fontSize: '1.1em'
+                            }}>
+                            {nativeText}
+                        </span>
+                    );
+                    lastIndex = match.index + match[0].length;
+                }
+                if (lastIndex < text.length) {
+                    parts.push(<span key={partIndex++}>{text.slice(lastIndex)}</span>);
+                }
+                return parts;
+            };
+
+            const goNext = () => { if (!isLast) setPageIndex(i => i + 1); };
+            const goPrev = () => { if (pageIndex > 0) setPageIndex(i => i - 1); };
+
+            return (
+                <div className="flex flex-col min-h-screen max-w-lg mx-auto animate-pop">
+                    <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                        <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-gray-500 text-xl">🏠</button>
+                        <span className="font-black text-gray-600">{story.title}</span>
+                        <span className="bg-white px-3 py-1 rounded-full font-black text-gray-500 shadow-sm text-sm">{pageIndex + 1}/{story.pages.length}</span>
+                    </div>
+                    <div className="flex gap-1 px-4 mb-3">
+                        {story.pages.map((_, i) => (
+                            <div key={i} className="flex-1 h-2 rounded-full transition-all" style={{background: i <= pageIndex ? story.color : '#e5e7eb'}}/>
+                        ))}
+                    </div>
+                    <div className="px-4 flex-1 flex flex-col gap-4">
+                        <div className="bg-white rounded-[1.5rem] shadow-xl overflow-hidden border-4" style={{borderColor: story.color}}>
+                            <StoryScene sceneKey={page.scene} />
+                        </div>
+                        <div className="bg-white rounded-2xl shadow-lg p-5 border-l-4" style={{borderColor: story.color}}>
+                            <p className="text-xl font-bold text-gray-700 leading-relaxed">
+                                {renderText()}
+                            </p>
+                            {page.nativeWords.length > 0 && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {page.nativeWords.map(nw => {
+                                        const w = wordMap[nw.id];
+                                        if (!w) return null;
+                                        const native = lang === 'yoruba' ? w.yoruba : w.gungbe;
+                                        return (
+                                            <button key={nw.id} onClick={() => playAudio(nw.id, lang)}
+                                                className="flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold transition-all active:scale-95"
+                                                style={{background: story.color + '22', color: story.shadow, border: '2px solid ' + story.color}}>
+                                                🔊 {native}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flex gap-3 px-4 py-4">
+                        <button onClick={goPrev} disabled={pageIndex === 0}
+                            className="flex-1 bg-white py-4 rounded-2xl font-black text-gray-500 shadow-lg text-xl disabled:opacity-30 active:scale-95 transition-all">
+                            ← Back
+                        </button>
+                        {isLast ? (
+                            <button onClick={onBack}
+                                className="flex-1 py-4 rounded-2xl font-black text-white text-xl active:scale-95 transition-all shadow-lg"
+                                style={{background: story.color, boxShadow: '0 4px 0 ' + story.shadow}}>
+                                The End! 🎉
+                            </button>
+                        ) : (
+                            <button onClick={goNext}
+                                className="flex-1 py-4 rounded-2xl font-black text-white text-xl active:scale-95 transition-all shadow-lg"
+                                style={{background: story.color, boxShadow: '0 4px 0 ' + story.shadow}}>
+                                Next →
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
