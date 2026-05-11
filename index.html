@@ -754,26 +754,15 @@
                 try {
                     const audioEntries = await getAllAudioEntries();
                     const audioKeys = Object.keys(audioEntries);
-                    // Only include words that have at least one audio recording
+                    // Only include words that have at least one audio recording, but export NO audio data
                     const wordsWithAudio = words.filter(w =>
                         audioKeys.some(k => k.startsWith(w.id + '_'))
                     );
-                    const audioWithHashes = {};
-                    for (const key of audioKeys) {
-                        const blob = audioEntries[key];
-                        const base64 = await blobToBase64(blob);
-                        const hash = await hashString(base64);
-                        audioWithHashes[key] = { data: base64, hash };
-                    }
-                    const currentVersion = localStorage.getItem('ll_words_version') || '0.0.0';
                     const exportData = {
                         words: wordsWithAudio,
-                        audio: audioWithHashes,
-                        version: currentVersion,
-                        timestamp: new Date().toISOString(),
-                        exportType: 'audio-only'
+                        timestamp: new Date().toISOString()
                     };
-                    const blob = new Blob([JSON.stringify(exportData)], { type: 'application/json' });
+                    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
