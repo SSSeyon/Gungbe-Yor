@@ -670,7 +670,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.14.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.15.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1578,38 +1578,30 @@
         // ── VIDEO PLAYER ──────────────────────────────────────────────────
         const VideoPlayer = ({ video, onBack }) => {
             const videoRef = useRef(null);
+            const iframeRef = useRef(null);
+            const containerRef = useRef(null);
             const [blobUrl, setBlobUrl] = useState(null);
+            const [isFullscreen, setIsFullscreen] = useState(false);
 
-            useEffect(() => {
-                if (video.blob) {
-                    const url = URL.createObjectURL(video.blob);
-                    setBlobUrl(url);
-                    return () => URL.revokeObjectURL(url);
-                }
-            }, [video.id]);
-
-            const isYouTube = (url) => {
-                return url && (url.includes('youtube.com') || url.includes('youtu.be'));
-            };
+            // Helpers
+            const isYouTube = (url) => url && (url.includes('youtube.com') || url.includes('youtu.be'));
+            const isGDrive = (url) => url && url.includes('drive.google.com');
+            const isEmbedOnly = (url) => isYouTube(url) || isGDrive(url);
 
             const getYouTubeEmbedUrl = (url) => {
                 let id = '';
                 try {
-                    if (url.includes('youtu.be/')) {
-                        id = url.split('youtu.be/')[1].split(/[?&]/)[0];
-                    } else if (url.includes('v=')) {
-                        id = url.split('v=')[1].split('&')[0];
-                    } else if (url.includes('/embed/')) {
-                        id = url.split('/embed/')[1].split(/[?&]/)[0];
-                    }
+                    if (url.includes('youtu.be/')) id = url.split('youtu.be/')[1].split(/[?&]/)[0];
+                    else if (url.includes('v=')) id = url.split('v=')[1].split('&')[0];
+                    else if (url.includes('/embed/')) id = url.split('/embed/')[1].split(/[?&]/)[0];
                 } catch (e) { id = ''; }
                 return id ? 'https://www.youtube.com/embed/' + id + '?autoplay=1&rel=0' : url;
             };
 
-            const getEmbedUrl = (url) => {
+            const getPlayUrl = (url) => {
                 if (!url) return '';
                 if (isYouTube(url)) return getYouTubeEmbedUrl(url);
-                if (url.includes('drive.google.com')) {
+                if (isGDrive(url)) {
                     const match = url.match(/\/d\/([^/]+)/);
                     if (match) return 'https://drive.google.com/file/d/' + match[1] + '/preview';
                 }
@@ -1619,53 +1611,123 @@
                 return url;
             };
 
-            const useIframe = video.url && (isYouTube(video.url) || video.url.includes('drive.google.com'));
-            const embedUrl = video.url ? getEmbedUrl(video.url) : null;
-            const directUrl = video.url && !useIframe ? getEmbedUrl(video.url) : null;
+            // Build blobUrl for stored blobs
+            useEffect(() => {
+                if (video.blob) {
+                    const url = URL.createObjectURL(video.blob);
+                    setBlobUrl(url);
+                    return () => URL.revokeObjectURL(url);
+                }
+            }, [video.id]);
+
+            // Enter fullscreen + landscape on mount
+            useEffect(() => {
+                const enterFullscreenLandscape = async () => {
+                    try {
+                        // iOS Safari: use webkitEnterFullscreen on the video element directly
+                        if (videoRef.current && videoRef.current.webkitEnterFullscreen) {
+                            videoRef.current.webkitEnterFullscreen();
+                            setIsFullscreen(true);
+                            return;
+                        }
+                        // Standard fullscreen on container
+                        const el = containerRef.current;
+                        if (el) {
+                            if (el.requestFullscreen) await el.requestFullscreen();
+                            else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+                            setIsFullscreen(true);
+                        }
+                        // Lock orientation to landscape
+                        if (screen.orientation && screen.orientation.lock) {
+                            await screen.orientation.lock('landscape').catch(() => {});
+                        }
+                    } catch (e) {
+                        // Fullscreen not supported or blocked - continue without it
+                    }
+                };
+                // Small delay so the element is mounted
+                const t = setTimeout(enterFullscreenLandscape, 150);
+                return () => clearTimeout(t);
+            }, [video.id]);
+
+            // Exit fullscreen + restore orientation on unmount
+            useEffect(() => {
+                const handleFsChange = () => {
+                    const fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+                    setIsFullscreen(fs);
+                };
+                document.addEventListener('fullscreenchange', handleFsChange);
+                document.addEventListener('webkitfullscreenchange', handleFsChange);
+                return () => {
+                    document.removeEventListener('fullscreenchange', handleFsChange);
+                    document.removeEventListener('webkitfullscreenchange', handleFsChange);
+                    // Exit fullscreen if still active
+                    if (document.fullscreenElement || document.webkitFullscreenElement) {
+                        if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+                        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                    }
+                    // Restore portrait
+                    if (screen.orientation && screen.orientation.unlock) {
+                        screen.orientation.unlock();
+                    }
+                };
+            }, []);
+
+            const handleBack = () => {
+                if (document.fullscreenElement || document.webkitFullscreenElement) {
+                    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+                    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                }
+                if (screen.orientation && screen.orientation.unlock) {
+                    screen.orientation.unlock();
+                }
+                onBack();
+            };
+
+            const useIframe = video.url && !video.blob && isEmbedOnly(video.url);
+            const playUrl = video.url ? getPlayUrl(video.url) : null;
+            const directUrl = video.url && !video.blob && !useIframe ? playUrl : null;
+            const srcUrl = blobUrl || (video.blob ? null : directUrl);
 
             return (
-                <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', display: 'flex', flexDirection: 'column' }}>
-                    {/* Close bar */}
-                    <div style={{ background: 'rgba(0,0,0,0.85)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 2 }}>
-                        <button onClick={onBack}
-                            style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 38, height: 38, color: 'white', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div
+                    ref={containerRef}
+                    style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', display: 'flex', flexDirection: 'column' }}
+                >
+                    {/* Top bar */}
+                    <div style={{ background: 'rgba(0,0,0,0.75)', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 2 }}>
+                        <button onClick={handleBack}
+                            style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 36, height: 36, color: 'white', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                             🏠
                         </button>
-                        <span style={{ color: 'rgba(255,255,255,0.7)', fontFamily: 'sans-serif', fontSize: 14, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{video.title}</span>
-                        <span style={{ fontSize: 20 }}>🎬</span>
+                        <span style={{ color: 'rgba(255,255,255,0.75)', fontFamily: 'sans-serif', fontSize: 13, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {video.title}
+                        </span>
+                        <span style={{ fontSize: 18, flexShrink: 0 }}>🎬</span>
                     </div>
 
                     {/* Video area */}
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
-                        {video.blob || blobUrl ? (
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', overflow: 'hidden' }}>
+                        {srcUrl ? (
                             <video
                                 ref={videoRef}
-                                src={blobUrl}
+                                src={srcUrl}
                                 controls
                                 autoPlay
+                                playsInline
                                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                             />
                         ) : useIframe ? (
                             <iframe
-                                src={embedUrl}
+                                ref={iframeRef}
+                                src={playUrl}
                                 style={{ width: '100%', height: '100%', border: 'none' }}
                                 allow="autoplay; fullscreen; picture-in-picture"
                                 allowFullScreen
                                 title={video.title}
                             />
-                        ) : directUrl ? (
-                            <video
-                                controls
-                                autoPlay
-                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                            >
-                                <source src={directUrl} />
-                                <p style={{ color: 'white', fontFamily: 'sans-serif', padding: 24 }}>
-                                    This video format cannot be played directly. Try downloading it first.
-                                </p>
-                            </video>
                         ) : (
-                            <div style={{ color: 'rgba(255,255,255,0.5)', fontFamily: 'sans-serif', textAlign: 'center' }}>
+                            <div style={{ color: 'rgba(255,255,255,0.5)', fontFamily: 'sans-serif', textAlign: 'center', padding: 24 }}>
                                 <div style={{ fontSize: 48, marginBottom: 12 }}>🎬</div>
                                 <p>No video source available.</p>
                             </div>
@@ -1673,6 +1735,16 @@
                     </div>
                 </div>
             );
+        };
+
+        // ── OFFLINE VIDEO CACHE HELPER ────────────────────────────────────
+        // Determines whether a URL video is cacheable (direct fetch possible)
+        // YouTube and Google Drive block cross-origin fetch -- streaming only.
+        const isVideoCacheable = (url) => {
+            if (!url) return false;
+            if (url.includes('youtube.com') || url.includes('youtu.be')) return false;
+            if (url.includes('drive.google.com')) return false;
+            return true;
         };
 
         // ── STORY SHELF (Gemini HTML stories + Videos) ────────────────────
@@ -1981,6 +2053,43 @@
                 showMsg('Video removed.');
             };
 
+            const [cachingId, setCachingId] = useState(null);
+            const [cacheProgress, setCacheProgress] = useState(0);
+
+            const saveForOffline = async (v) => {
+                if (!isVideoCacheable(v.url)) return;
+                setCachingId(v.id);
+                setCacheProgress(0);
+                showMsg('Downloading "' + v.title + '" for offline use...');
+                try {
+                    const res = await fetch(v.url);
+                    if (!res.ok) throw new Error('Server returned ' + res.status);
+                    const contentLength = res.headers.get('Content-Length');
+                    const total = contentLength ? parseInt(contentLength) : 0;
+                    const reader = res.body.getReader();
+                    const chunks = [];
+                    let received = 0;
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        received += value.length;
+                        if (total > 0) setCacheProgress(Math.round((received / total) * 100));
+                    }
+                    const mimeType = res.headers.get('Content-Type') || 'video/mp4';
+                    const blob = new Blob(chunks, { type: mimeType });
+                    const sizeMB = Math.round(blob.size / (1024 * 1024));
+                    const updated = { ...v, blob, mimeType, sizeMB, cachedAt: Date.now() };
+                    await dbSaveVideo(updated);
+                    await refresh();
+                    showMsg('"' + v.title + '" saved for offline use (' + sizeMB + 'MB)!');
+                } catch (err) {
+                    showMsg('Download failed: ' + err.message + '. Check the URL allows cross-origin access.', true);
+                }
+                setCachingId(null);
+                setCacheProgress(0);
+            };
+
             return (
                 <div className="space-y-5">
 
@@ -2065,21 +2174,58 @@
                         {/* Video list */}
                         {videos.length > 0 && (
                             <div className="space-y-2 mt-3">
-                                {videos.map(v => (
-                                    <div key={v.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
-                                        <span style={{ fontSize: 22 }}>🎬</span>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
-                                            <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}
-                                            </p>
+                                {videos.map(v => {
+                                    const isCaching = cachingId === v.id;
+                                    const isCached = !!(v.blob || v.cachedAt);
+                                    const canCache = isVideoCacheable(v.url) && !isCached;
+                                    return (
+                                        <div key={v.id} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
+                                            <div className="flex items-center gap-3">
+                                                <span style={{ fontSize: 22, flexShrink: 0 }}>🎬</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
+                                                    <div className="flex items-center gap-2 mt-0.5">
+                                                        <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                                            {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}
+                                                        </p>
+                                                        {isCached && (
+                                                            <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                                                offline
+                                                            </span>
+                                                        )}
+                                                        {!isCached && v.url && !isVideoCacheable(v.url) && (
+                                                            <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                                                streaming only
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                {canCache && !isCaching && (
+                                                    <button onClick={() => saveForOffline(v)}
+                                                        className="bg-green-50 text-green-600 px-2 py-1.5 rounded-lg text-xs font-bold border border-green-100 hover:bg-green-100 transition-colors flex-shrink-0"
+                                                        style={{ fontFamily: 'sans-serif' }}>
+                                                        Save offline
+                                                    </button>
+                                                )}
+                                                <button onClick={() => handleDeleteVideo(v.id)}
+                                                    className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
+                                                    <Icon name="Trash2" size={14} />
+                                                </button>
+                                            </div>
+                                            {isCaching && (
+                                                <div className="mt-2">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className="text-xs text-green-600 font-bold" style={{ fontFamily: 'sans-serif' }}>Downloading...</span>
+                                                        <span className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>{cacheProgress}%</span>
+                                                    </div>
+                                                    <div className="w-full bg-gray-100 rounded-full h-1.5">
+                                                        <div className="bg-green-500 h-1.5 rounded-full transition-all" style={{ width: cacheProgress + '%' }} />
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
-                                        <button onClick={() => handleDeleteVideo(v.id)}
-                                            className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
-                                            <Icon name="Trash2" size={14} />
-                                        </button>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -2095,10 +2241,10 @@
                     <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                         <p className="text-xs font-bold text-gray-600 mb-1">Supported video sources</p>
                         <p className="text-xs text-gray-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
-                            <strong>Upload:</strong> mp4, webm, mov files up to 300MB stored on this device.<br />
-                            <strong>YouTube:</strong> paste any youtube.com or youtu.be link.<br />
-                            <strong>Google Drive:</strong> paste a share link - the file must be set to "Anyone with the link can view".<br />
-                            <strong>Dropbox:</strong> paste a share link - it will stream directly.
+                            <strong>Upload:</strong> mp4, webm, mov files up to 300MB - stored on this device, works offline.<br />
+                            <strong>YouTube:</strong> streams only - cannot be saved for offline.<br />
+                            <strong>Google Drive:</strong> streams only - cannot be saved for offline.<br />
+                            <strong>Dropbox / direct URL:</strong> tap "Save offline" to download and cache for offline playback.
                         </p>
                     </div>
                 </div>
