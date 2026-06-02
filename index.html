@@ -219,8 +219,8 @@
         const DB_NAME = 'LittleLinguistDB';
         const STORE_NAME = 'audio_files';
         const STORIES_STORE = 'stories';
-        const JSON_STORIES_STORE = 'json_stories';
-        const DB_VERSION = 3;
+        const VIDEOS_STORE = 'videos';
+        const DB_VERSION = 5;
 
         const initDB = () => {
             return new Promise((resolve, reject) => {
@@ -230,7 +230,8 @@
                     const db = event.target.result;
                     if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
                     if (!db.objectStoreNames.contains(STORIES_STORE)) db.createObjectStore(STORIES_STORE, { keyPath: 'id' });
-                    if (!db.objectStoreNames.contains(JSON_STORIES_STORE)) db.createObjectStore(JSON_STORIES_STORE, { keyPath: 'id' });
+                    if (db.objectStoreNames.contains('json_stories')) db.deleteObjectStore('json_stories');
+                    if (!db.objectStoreNames.contains(VIDEOS_STORE)) db.createObjectStore(VIDEOS_STORE, { keyPath: 'id' });
                 };
                 request.onsuccess = (event) => resolve(event.target.result);
             });
@@ -308,6 +309,37 @@
             return new Promise((resolve, reject) => {
                 const tx = db.transaction([STORIES_STORE], 'readwrite');
                 tx.objectStore(STORIES_STORE).delete(id);
+                tx.oncomplete = resolve;
+                tx.onerror = (e) => reject(e.target.error);
+            });
+        };
+
+        // --- VIDEO INDEXEDDB HELPERS ---
+        const dbSaveVideo = async (video) => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([VIDEOS_STORE], 'readwrite');
+                tx.objectStore(VIDEOS_STORE).put(video);
+                tx.oncomplete = resolve;
+                tx.onerror = (e) => reject(e.target.error);
+            });
+        };
+
+        const dbLoadVideos = async () => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([VIDEOS_STORE], 'readonly');
+                const req = tx.objectStore(VIDEOS_STORE).getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = (e) => reject(e.target.error);
+            });
+        };
+
+        const dbDeleteVideo = async (id) => {
+            const db = await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([VIDEOS_STORE], 'readwrite');
+                tx.objectStore(VIDEOS_STORE).delete(id);
                 tx.oncomplete = resolve;
                 tx.onerror = (e) => reject(e.target.error);
             });
@@ -638,7 +670,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.12.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.14.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1541,293 +1573,121 @@
 
         // ─────────────────────────────────────────────────────
 
-        // ─────────────────────────────────────────────────────────────────
-        // JSON STORY SYSTEM
-        // Stories are authored as structured JSON (title, pages, audio cues,
-        // highlight words). They live in IndexedDB under the 'json_stories'
-        // store (DB v3). The reader is built entirely inside the app so page
-        // flip, motion, theming and word-audio all work natively.
-        //
-        // JSON Story schema:
-        // {
-        //   id, title, coverEmoji, theme (color name), author,
-        //   pages: [{
-        //     text,              -- narration text shown on page
-        //     nativeText,        -- optional native-language line below
-        //     image,             -- base64 data URL or https:// URL
-        //     imageAlt,          -- accessibility label
-        //     bgColor,           -- optional hex or CSS colour for page bg
-        //     animation,         -- "float" | "bounce" | "pulse" | "none"
-        //     audio,             -- optional base64 data URL for narration clip
-        //     highlightWords: [{ word, wordId, lang }]
-        //   }]
-        // }
-        // ─────────────────────────────────────────────────────────────────
 
 
-        const dbSaveJsonStory = async (story) => {
-            const db = await initDB();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction([JSON_STORIES_STORE], 'readwrite');
-                tx.objectStore(JSON_STORIES_STORE).put(story);
-                tx.oncomplete = resolve;
-                tx.onerror = (e) => reject(e.target.error);
-            });
-        };
+        // ── VIDEO PLAYER ──────────────────────────────────────────────────
+        const VideoPlayer = ({ video, onBack }) => {
+            const videoRef = useRef(null);
+            const [blobUrl, setBlobUrl] = useState(null);
 
-        const dbLoadJsonStories = async () => {
-            const db = await initDB();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction([JSON_STORIES_STORE], 'readonly');
-                const req = tx.objectStore(JSON_STORIES_STORE).getAll();
-                req.onsuccess = () => resolve(req.result || []);
-                req.onerror = (e) => reject(e.target.error);
-            });
-        };
-
-        const dbDeleteJsonStory = async (id) => {
-            const db = await initDB();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction([JSON_STORIES_STORE], 'readwrite');
-                tx.objectStore(JSON_STORIES_STORE).delete(id);
-                tx.oncomplete = resolve;
-                tx.onerror = (e) => reject(e.target.error);
-            });
-        };
-
-        // ── JSON STORY READER ─────────────────────────────────────────────
-        // Full-screen animated storybook reader for JSON stories.
-        const JsonStoryReader = ({ story, lang, playAudio, words, onBack }) => {
-            const [pageIndex, setPageIndex] = useState(0);
-            const [direction, setDirection] = useState('next');
-            const [animating, setAnimating] = useState(false);
-            const [isPlaying, setIsPlaying] = useState(false);
-            const audioRef = useRef(null);
-            const narrationRef = useRef(null);
-
-            const pages = story.pages || [];
-            const page = pages[pageIndex];
-            const isFirst = pageIndex === 0;
-            const isLast = pageIndex === pages.length - 1;
-
-            // Auto-play page narration audio on page change
             useEffect(() => {
-                if (!page) return;
-                stopAudio();
-                if (page.audio) {
-                    const a = new Audio(page.audio);
-                    audioRef.current = a;
-                    a.play().catch(() => {});
-                    setIsPlaying(true);
-                    a.onended = () => setIsPlaying(false);
+                if (video.blob) {
+                    const url = URL.createObjectURL(video.blob);
+                    setBlobUrl(url);
+                    return () => URL.revokeObjectURL(url);
                 }
-                return () => stopAudio();
-            }, [pageIndex]);
+            }, [video.id]);
 
-            const stopAudio = () => {
-                if (audioRef.current) {
-                    audioRef.current.pause();
-                    audioRef.current.currentTime = 0;
-                    audioRef.current = null;
-                }
-                if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-                setIsPlaying(false);
+            const isYouTube = (url) => {
+                return url && (url.includes('youtube.com') || url.includes('youtu.be'));
             };
 
-            const toggleNarration = () => {
-                if (isPlaying) {
-                    stopAudio();
-                } else if (page.audio) {
-                    const a = new Audio(page.audio);
-                    audioRef.current = a;
-                    a.play().catch(() => {});
-                    setIsPlaying(true);
-                    a.onended = () => setIsPlaying(false);
-                } else {
-                    // TTS fallback for page text
-                    if ('speechSynthesis' in window) {
-                        const u = new SpeechSynthesisUtterance(page.text || '');
-                        window.speechSynthesis.speak(u);
-                        setIsPlaying(true);
-                        u.onend = () => setIsPlaying(false);
+            const getYouTubeEmbedUrl = (url) => {
+                let id = '';
+                try {
+                    if (url.includes('youtu.be/')) {
+                        id = url.split('youtu.be/')[1].split(/[?&]/)[0];
+                    } else if (url.includes('v=')) {
+                        id = url.split('v=')[1].split('&')[0];
+                    } else if (url.includes('/embed/')) {
+                        id = url.split('/embed/')[1].split(/[?&]/)[0];
                     }
+                } catch (e) { id = ''; }
+                return id ? 'https://www.youtube.com/embed/' + id + '?autoplay=1&rel=0' : url;
+            };
+
+            const getEmbedUrl = (url) => {
+                if (!url) return '';
+                if (isYouTube(url)) return getYouTubeEmbedUrl(url);
+                if (url.includes('drive.google.com')) {
+                    const match = url.match(/\/d\/([^/]+)/);
+                    if (match) return 'https://drive.google.com/file/d/' + match[1] + '/preview';
                 }
+                if (url.includes('dropbox.com')) {
+                    return url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '').replace('?dl=1', '');
+                }
+                return url;
             };
 
-            const goTo = (newIndex, dir) => {
-                if (animating) return;
-                stopAudio();
-                setDirection(dir);
-                setAnimating(true);
-                setTimeout(() => {
-                    setPageIndex(newIndex);
-                    setAnimating(false);
-                }, 320);
-            };
-
-            const goNext = () => { if (!isLast) goTo(pageIndex + 1, 'next'); };
-            const goPrev = () => { if (!isFirst) goTo(pageIndex - 1, 'prev'); };
-
-            // Swipe support
-            const touchStartX = useRef(null);
-            const onTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
-            const onTouchEnd = (e) => {
-                if (!touchStartX.current) return;
-                const diff = touchStartX.current - e.changedTouches[0].clientX;
-                if (diff > 50) goNext();
-                else if (diff < -50) goPrev();
-                touchStartX.current = null;
-            };
-
-            // Render story text with tappable highlighted words
-            const renderText = (text, highlights) => {
-                if (!highlights || highlights.length === 0) return text;
-                const parts = [];
-                let remaining = text;
-                let key = 0;
-                highlights.forEach(hw => {
-                    const idx = remaining.indexOf(hw.word);
-                    if (idx === -1) return;
-                    if (idx > 0) parts.push(<span key={key++}>{remaining.slice(0, idx)}</span>);
-                    parts.push(
-                        <button
-                            key={key++}
-                            onClick={() => playAudio(hw.wordId, hw.lang)}
-                            style={{
-                                display: 'inline',
-                                background: 'rgba(255,220,50,0.35)',
-                                border: '2px solid rgba(255,180,0,0.7)',
-                                borderRadius: 8,
-                                padding: '0 4px',
-                                fontWeight: 900,
-                                color: '#7c4a00',
-                                cursor: 'pointer',
-                                fontSize: 'inherit',
-                                lineHeight: 'inherit',
-                                verticalAlign: 'baseline'
-                            }}
-                        >
-                            {hw.word} 🔊
-                        </button>
-                    );
-                    remaining = remaining.slice(idx + hw.word.length);
-                });
-                if (remaining) parts.push(<span key={key++}>{remaining}</span>);
-                return parts;
-            };
-
-            if (!page) return null;
-
-            // Page background: use page bgColor or story theme or default gradient
-            const pageBg = page.bgColor || '#fff';
-
-            // Image animation class
-            const imgAnim = page.animation === 'float' ? 'animate-float'
-                : page.animation === 'bounce' ? 'animate-bounce-slow'
-                : page.animation === 'pulse' ? 'animate-pulse-gentle'
-                : '';
-
-            // Page flip slide direction
-            const slideStyle = animating
-                ? { transform: direction === 'next' ? 'translateX(-100%)' : 'translateX(100%)', opacity: 0, transition: 'transform 0.32s cubic-bezier(0.4,0,0.2,1), opacity 0.32s' }
-                : { transform: 'translateX(0)', opacity: 1, transition: 'transform 0.32s cubic-bezier(0.4,0,0.2,1), opacity 0.32s' };
+            const useIframe = video.url && (isYouTube(video.url) || video.url.includes('drive.google.com'));
+            const embedUrl = video.url ? getEmbedUrl(video.url) : null;
+            const directUrl = video.url && !useIframe ? getEmbedUrl(video.url) : null;
 
             return (
-                <div
-                    style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#0a0a1a', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-                    onTouchStart={onTouchStart}
-                    onTouchEnd={onTouchEnd}
-                >
-                    {/* Top bar */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: 'rgba(10,10,26,0.95)', flexShrink: 0, zIndex: 2 }}>
-                        <button onClick={() => { stopAudio(); onBack(); }}
+                <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', display: 'flex', flexDirection: 'column' }}>
+                    {/* Close bar */}
+                    <div style={{ background: 'rgba(0,0,0,0.85)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 2 }}>
+                        <button onClick={onBack}
                             style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 38, height: 38, color: 'white', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             🏠
                         </button>
-                        <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: 700, fontFamily: 'sans-serif', textAlign: 'center', flex: 1, padding: '0 8px' }}>
-                            {story.title}
-                        </div>
-                        <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12, fontFamily: 'sans-serif', minWidth: 48, textAlign: 'right' }}>
-                            {pageIndex + 1}/{pages.length}
-                        </div>
+                        <span style={{ color: 'rgba(255,255,255,0.7)', fontFamily: 'sans-serif', fontSize: 14, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{video.title}</span>
+                        <span style={{ fontSize: 20 }}>🎬</span>
                     </div>
 
-                    {/* Page content with slide animation */}
-                    <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-                        <div style={{ ...slideStyle, position: 'absolute', inset: 0, background: pageBg, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', padding: '20px 16px 16px' }}>
-                            {/* Illustration */}
-                            {page.image && (
-                                <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
-                                    <img
-                                        src={page.image}
-                                        alt={page.imageAlt || ''}
-                                        className={imgAnim}
-                                        style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', borderRadius: 20, boxShadow: '0 8px 32px rgba(0,0,0,0.25)' }}
-                                    />
-                                </div>
-                            )}
-                            {!page.image && (
-                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 120 }}>
-                                    {story.coverEmoji || '📖'}
-                                </div>
-                            )}
-
-                            {/* Text box */}
-                            <div style={{ width: '100%', background: 'rgba(255,255,255,0.96)', borderRadius: 20, padding: '16px 18px', boxShadow: '0 -4px 20px rgba(0,0,0,0.12)', flexShrink: 0 }}>
-                                <p style={{ fontSize: 22, fontWeight: 800, color: '#1a1a2e', lineHeight: 1.45, margin: 0, fontFamily: 'sans-serif' }}>
-                                    {renderText(page.text || '', page.highlightWords)}
+                    {/* Video area */}
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
+                        {video.blob || blobUrl ? (
+                            <video
+                                ref={videoRef}
+                                src={blobUrl}
+                                controls
+                                autoPlay
+                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                            />
+                        ) : useIframe ? (
+                            <iframe
+                                src={embedUrl}
+                                style={{ width: '100%', height: '100%', border: 'none' }}
+                                allow="autoplay; fullscreen; picture-in-picture"
+                                allowFullScreen
+                                title={video.title}
+                            />
+                        ) : directUrl ? (
+                            <video
+                                controls
+                                autoPlay
+                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                            >
+                                <source src={directUrl} />
+                                <p style={{ color: 'white', fontFamily: 'sans-serif', padding: 24 }}>
+                                    This video format cannot be played directly. Try downloading it first.
                                 </p>
-                                {page.nativeText && (
-                                    <p style={{ fontSize: 16, fontWeight: 600, color: '#6b4c9a', marginTop: 8, fontFamily: 'sans-serif', fontStyle: 'italic' }}>
-                                        {page.nativeText}
-                                    </p>
-                                )}
+                            </video>
+                        ) : (
+                            <div style={{ color: 'rgba(255,255,255,0.5)', fontFamily: 'sans-serif', textAlign: 'center' }}>
+                                <div style={{ fontSize: 48, marginBottom: 12 }}>🎬</div>
+                                <p>No video source available.</p>
                             </div>
-                        </div>
-                    </div>
-
-                    {/* Bottom nav */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: 'rgba(10,10,26,0.95)', flexShrink: 0 }}>
-                        <button onClick={goPrev} disabled={isFirst}
-                            style={{ flex: 1, padding: '12px 0', borderRadius: 14, background: isFirst ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.14)', border: 'none', color: isFirst ? 'rgba(255,255,255,0.25)' : 'white', fontSize: 22, cursor: isFirst ? 'not-allowed' : 'pointer', fontWeight: 900 }}>
-                            &#8592;
-                        </button>
-                        {/* Narration button */}
-                        <button onClick={toggleNarration}
-                            style={{ width: 52, height: 52, borderRadius: '50%', background: isPlaying ? '#f59e0b' : '#6366f1', border: 'none', color: 'white', fontSize: 22, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isPlaying ? '0 0 0 4px rgba(245,158,11,0.35)' : 'none', transition: 'all 0.2s' }}>
-                            {isPlaying ? '⏸' : '🔊'}
-                        </button>
-                        <button onClick={goNext} disabled={isLast}
-                            style={{ flex: 1, padding: '12px 0', borderRadius: 14, background: isLast ? 'rgba(255,255,255,0.06)' : 'linear-gradient(to bottom, #818cf8, #6366f1)', border: 'none', color: isLast ? 'rgba(255,255,255,0.25)' : 'white', fontSize: 22, cursor: isLast ? 'not-allowed' : 'pointer', fontWeight: 900 }}>
-                            &#8594;
-                        </button>
-                    </div>
-
-                    {/* Page dots */}
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: 6, paddingBottom: 10, background: 'rgba(10,10,26,0.95)', flexShrink: 0 }}>
-                        {pages.map((_, i) => (
-                            <button key={i} onClick={() => goTo(i, i > pageIndex ? 'next' : 'prev')}
-                                style={{ width: i === pageIndex ? 20 : 8, height: 8, borderRadius: 4, background: i === pageIndex ? '#818cf8' : 'rgba(255,255,255,0.25)', border: 'none', cursor: 'pointer', transition: 'all 0.2s', padding: 0 }} />
-                        ))}
+                        )}
                     </div>
                 </div>
             );
         };
 
-        // ── JSON STORY SHELF ──────────────────────────────────────────────
-        // Kid-facing shelf that shows both Gemini HTML stories AND JSON stories.
+        // ── STORY SHELF (Gemini HTML stories + Videos) ────────────────────
         const StoryShelf = ({ lang, words, playAudio, onBack }) => {
             const [htmlStories, setHtmlStories] = useState([]);
-            const [jsonStories, setJsonStories] = useState([]);
+            const [videos, setVideos] = useState([]);
             const [loading, setLoading] = useState(true);
             const [activeHtml, setActiveHtml] = useState(null);
-            const [activeJson, setActiveJson] = useState(null);
+            const [activeVideo, setActiveVideo] = useState(null);
 
             const refresh = () => {
                 setLoading(true);
-                Promise.all([dbLoadStories(), dbLoadJsonStories()]).then(([html, json]) => {
+                Promise.all([dbLoadStories(), dbLoadVideos()]).then(([html, vids]) => {
                     setHtmlStories(html);
-                    setJsonStories(json);
+                    setVideos(vids);
                     setLoading(false);
                 }).catch(() => setLoading(false));
             };
@@ -1837,11 +1697,12 @@
             if (activeHtml) {
                 return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} />;
             }
-            if (activeJson) {
-                return <JsonStoryReader story={activeJson} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveJson(null); refresh(); }} />;
+
+            if (activeVideo) {
+                return <VideoPlayer video={activeVideo} onBack={() => { setActiveVideo(null); refresh(); }} />;
             }
 
-            const total = htmlStories.length + jsonStories.length;
+            const isEmpty = htmlStories.length === 0 && videos.length === 0;
 
             return (
                 <div className="p-4 max-w-2xl mx-auto animate-pop">
@@ -1851,52 +1712,77 @@
                     </div>
                     {loading ? (
                         <div className="text-center py-16 text-gray-400 font-bold text-lg">Loading...</div>
-                    ) : total === 0 ? (
+                    ) : isEmpty ? (
                         <div className="bg-white rounded-[2rem] shadow-lg p-10 text-center border-2 border-dashed border-gray-200">
                             <div className="text-6xl mb-4">📚</div>
                             <p className="text-gray-600 font-bold text-lg mb-2">No stories yet!</p>
-                            <p className="text-gray-400 text-sm leading-relaxed">Go to Parent Zone - Stories tab to import or create a story.</p>
+                            <p className="text-gray-400 text-sm leading-relaxed">Go to Parent Zone - Stories tab to import a story or video.</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-1 gap-5">
-                            {jsonStories.map(story => (
-                                <button key={story.id} onClick={() => setActiveJson(story)}
-                                    className="bg-white rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all overflow-hidden text-left border-b-8 border-indigo-200 active:scale-[.99]">
-                                    <div className="h-40 relative flex items-center justify-center overflow-hidden"
-                                        style={{ background: 'linear-gradient(135deg, #6366f1, #a855f7)' }}>
-                                        <span style={{ fontSize: 72 }} className="drop-shadow-lg">{story.coverEmoji || '📖'}</span>
-                                        <div className="absolute inset-0" style={{ background: 'linear-gradient(to top,rgba(0,0,0,0.3) 0%,transparent 60%)' }} />
-                                        <div className="absolute top-2 right-3 bg-white/20 text-white text-xs font-bold px-2 py-1 rounded-full">✨ Interactive</div>
-                                        <div className="absolute bottom-3 left-4 right-4">
-                                            <p className="text-white font-black text-lg drop-shadow-md leading-tight">{story.title}</p>
-                                        </div>
+                        <div className="space-y-6">
+                            {/* HTML Stories section */}
+                            {htmlStories.length > 0 && (
+                                <div>
+                                    <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Stories 📖</p>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        {htmlStories.map(story => (
+                                            <button key={story.id} onClick={() => setActiveHtml(story)}
+                                                className="bg-white rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all overflow-hidden text-left border-b-8 border-purple-200 active:scale-[.99]">
+                                                <div className="h-36 bg-gradient-to-br from-indigo-400 to-purple-500 relative flex items-center justify-center">
+                                                    <span className="text-8xl drop-shadow-lg">📖</span>
+                                                    <div className="absolute inset-0" style={{ background: 'linear-gradient(to top,rgba(0,0,0,0.35) 0%,transparent 60%)' }} />
+                                                    <div className="absolute bottom-3 left-4 right-4">
+                                                        <p className="text-white font-black text-base drop-shadow-md leading-tight">{story.title}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="px-5 py-3 flex items-center justify-between">
+                                                    <div className="text-sm text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                                        {story.pageCount || '?'} pages{story.author ? ' - by ' + story.author : ''}
+                                                    </div>
+                                                    <span className="text-xl">&#9654;&#65039;</span>
+                                                </div>
+                                            </button>
+                                        ))}
                                     </div>
-                                    <div className="px-5 py-4 flex items-center justify-between">
-                                        <div className="text-sm text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                            {(story.pages || []).length} pages{story.author ? ' - by ' + story.author : ''}
-                                        </div>
-                                        <span className="text-2xl">&#9654;&#65039;</span>
+                                </div>
+                            )}
+
+                            {/* Videos section */}
+                            {videos.length > 0 && (
+                                <div>
+                                    <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Videos 🎬</p>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        {videos.map(video => (
+                                            <button key={video.id} onClick={() => setActiveVideo(video)}
+                                                className="bg-white rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all overflow-hidden text-left border-b-8 border-rose-200 active:scale-[.99]">
+                                                <div className="h-36 relative flex items-center justify-center overflow-hidden"
+                                                    style={{ background: video.thumbnail ? 'none' : 'linear-gradient(135deg,#f43f5e,#fb923c)' }}>
+                                                    {video.thumbnail ? (
+                                                        <img src={video.thumbnail} alt={video.title}
+                                                            style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} />
+                                                    ) : (
+                                                        <span className="text-8xl drop-shadow-lg">🎬</span>
+                                                    )}
+                                                    <div className="absolute inset-0" style={{ background: 'linear-gradient(to top,rgba(0,0,0,0.5) 0%,transparent 50%)' }} />
+                                                    {/* Play icon overlay */}
+                                                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 52, height: 52, background: 'rgba(255,255,255,0.25)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                                                        <span style={{ fontSize: 22, marginLeft: 3 }}>&#9654;</span>
+                                                    </div>
+                                                    <div className="absolute bottom-3 left-4 right-4">
+                                                        <p className="text-white font-black text-base drop-shadow-md leading-tight">{video.title}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="px-5 py-3 flex items-center justify-between">
+                                                    <div className="text-sm text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                                        {video.blob ? 'Downloaded' : 'Streamed'} - {video.source || 'video'}
+                                                    </div>
+                                                    <span className="text-xl">🎬</span>
+                                                </div>
+                                            </button>
+                                        ))}
                                     </div>
-                                </button>
-                            ))}
-                            {htmlStories.map(story => (
-                                <button key={story.id} onClick={() => setActiveHtml(story)}
-                                    className="bg-white rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all overflow-hidden text-left border-b-8 border-purple-200 active:scale-[.99]">
-                                    <div className="h-40 bg-gradient-to-br from-indigo-400 to-purple-500 relative flex items-center justify-center">
-                                        <span className="text-8xl drop-shadow-lg">📖</span>
-                                        <div className="absolute inset-0" style={{ background: 'linear-gradient(to top,rgba(0,0,0,0.35) 0%,transparent 60%)' }} />
-                                        <div className="absolute bottom-3 left-4 right-4">
-                                            <p className="text-white font-black text-lg drop-shadow-md leading-tight">{story.title}</p>
-                                        </div>
-                                    </div>
-                                    <div className="px-5 py-4 flex items-center justify-between">
-                                        <div className="text-sm text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                            {story.pageCount || '?'} pages - read aloud{story.author ? ' - by ' + story.author : ''}
-                                        </div>
-                                        <span className="text-2xl">&#9654;&#65039;</span>
-                                    </div>
-                                </button>
-                            ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1952,32 +1838,33 @@
             );
         };
 
-        // ── JSON STORY IMPORTER / EDITOR (Parent Zone - Stories tab) ─────
+        // ── STORY IMPORTER (Parent Zone - Stories tab) ────────────────────
         const StoryImporter = ({ words }) => {
             const [htmlStories, setHtmlStories] = useState([]);
-            const [jsonStories, setJsonStories] = useState([]);
+            const [videos, setVideos] = useState([]);
             const [status, setStatus] = useState('');
             const [isError, setIsError] = useState(false);
             const [busy, setBusy] = useState(false);
-            const [showBuilder, setShowBuilder] = useState(false);
-            const [editingStory, setEditingStory] = useState(null);
+            const [videoTitle, setVideoTitle] = useState('');
+            const [videoUrl, setVideoUrl] = useState('');
+            const [showUrlForm, setShowUrlForm] = useState(false);
             const htmlRef = useRef(null);
-            const jsonRef = useRef(null);
+            const videoRef = useRef(null);
 
             const refresh = () => {
-                Promise.all([dbLoadStories(), dbLoadJsonStories()]).then(([html, json]) => {
+                Promise.all([dbLoadStories(), dbLoadVideos()]).then(([html, vids]) => {
                     setHtmlStories(html);
-                    setJsonStories(json);
+                    setVideos(vids);
                 });
             };
             useEffect(() => { refresh(); }, []);
 
             const showMsg = (msg, err = false) => {
                 setStatus(msg); setIsError(err);
-                setTimeout(() => setStatus(''), 5000);
+                setTimeout(() => setStatus(''), 6000);
             };
 
-            // Import Gemini HTML
+            // Import Gemini HTML story
             const importHTML = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -2004,27 +1891,82 @@
                 e.target.value = '';
             };
 
-            // Import JSON story file
-            const importJSON = (e) => {
+            // Import video file
+            const importVideoFile = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                const sizeMB = file.size / (1024 * 1024);
+                if (sizeMB > 300) {
+                    showMsg('File is too large (' + sizeMB.toFixed(0) + 'MB). Maximum is 300MB.', true);
+                    e.target.value = '';
+                    return;
+                }
                 setBusy(true);
+                showMsg('Importing video... this may take a moment for large files.');
+                const title = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
                 const reader = new FileReader();
                 reader.onload = async (ev) => {
                     try {
-                        const data = JSON.parse(ev.target.result);
-                        if (!data.title || !Array.isArray(data.pages)) throw new Error('Invalid story format. Need "title" and "pages" array.');
-                        const story = { ...data, id: data.id || ('jstory_' + Date.now()) };
-                        await dbSaveJsonStory(story);
+                        const blob = new Blob([ev.target.result], { type: file.type });
+                        const video = {
+                            id: 'video_' + Date.now(),
+                            title,
+                            source: 'file',
+                            mimeType: file.type,
+                            sizeMB: Math.round(sizeMB),
+                            blob,
+                            thumbnail: '',
+                            url: null
+                        };
+                        await dbSaveVideo(video);
                         await refresh();
-                        showMsg('Imported "' + story.title + '" (' + story.pages.length + ' pages)!');
+                        showMsg('Video "' + title + '" added (' + Math.round(sizeMB) + 'MB)!');
                     } catch (err) {
                         showMsg('Import failed: ' + err.message, true);
                     }
                     setBusy(false);
                 };
-                reader.readAsText(file);
+                reader.readAsArrayBuffer(file);
                 e.target.value = '';
+            };
+
+            // Add video by URL
+            const addVideoUrl = async () => {
+                if (!videoUrl.trim()) { showMsg('Please enter a URL.', true); return; }
+                if (!videoTitle.trim()) { showMsg('Please enter a title for this video.', true); return; }
+                setBusy(true);
+                try {
+                    const source = videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') ? 'YouTube'
+                        : videoUrl.includes('drive.google.com') ? 'Google Drive'
+                        : videoUrl.includes('dropbox.com') ? 'Dropbox'
+                        : 'URL';
+                    const getThumbnail = (url) => {
+                        if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                            let id = '';
+                            if (url.includes('youtu.be/')) id = url.split('youtu.be/')[1].split(/[?&]/)[0];
+                            else if (url.includes('v=')) id = url.split('v=')[1].split('&')[0];
+                            return id ? 'https://img.youtube.com/vi/' + id + '/hqdefault.jpg' : '';
+                        }
+                        return '';
+                    };
+                    const video = {
+                        id: 'video_' + Date.now(),
+                        title: videoTitle.trim(),
+                        source,
+                        url: videoUrl.trim(),
+                        thumbnail: getThumbnail(videoUrl.trim()),
+                        blob: null
+                    };
+                    await dbSaveVideo(video);
+                    await refresh();
+                    showMsg('Video "' + video.title + '" added!');
+                    setVideoTitle('');
+                    setVideoUrl('');
+                    setShowUrlForm(false);
+                } catch (err) {
+                    showMsg('Failed to add video: ' + err.message, true);
+                }
+                setBusy(false);
             };
 
             const handleDeleteHtml = async (id) => {
@@ -2033,56 +1975,113 @@
                 showMsg('Story removed.');
             };
 
-            const handleDeleteJson = async (id) => {
-                await dbDeleteJsonStory(id);
+            const handleDeleteVideo = async (id) => {
+                await dbDeleteVideo(id);
                 await refresh();
-                showMsg('Story removed.');
+                showMsg('Video removed.');
             };
 
-            if (showBuilder) {
-                return (
-                    <JsonStoryBuilder
-                        words={words}
-                        initial={editingStory}
-                        onSave={async (story) => {
-                            await dbSaveJsonStory(story);
-                            await refresh();
-                            setShowBuilder(false);
-                            setEditingStory(null);
-                            showMsg('Story saved!');
-                        }}
-                        onCancel={() => { setShowBuilder(false); setEditingStory(null); }}
-                    />
-                );
-            }
-
             return (
-                <div className="space-y-4">
-                    {/* Action buttons */}
-                    <div className="grid grid-cols-1 gap-2">
-                        <button onClick={() => { setEditingStory(null); setShowBuilder(true); }}
-                            className="w-full bg-indigo-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all"
+                <div className="space-y-5">
+
+                    {/* ── STORIES section ── */}
+                    <div>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Stories</p>
+                        <input type="file" ref={htmlRef} accept=".html,.htm" onChange={importHTML} className="hidden" />
+                        <button onClick={() => htmlRef.current.click()} disabled={busy}
+                            className="w-full bg-indigo-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60"
                             style={{ fontFamily: 'sans-serif' }}>
-                            ✏️ Create New Story
+                            <Icon name="Upload" size={16} /> Import Gemini Story (.html)
                         </button>
+                        {htmlStories.length > 0 && (
+                            <div className="space-y-2 mt-3">
+                                {htmlStories.map(s => (
+                                    <div key={s.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
+                                        <span style={{ fontSize: 22 }}>📖</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
+                                            <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                                {s.pageCount || '?'} pages{s.author ? ' - ' + s.author : ''}
+                                            </p>
+                                        </div>
+                                        <button onClick={() => handleDeleteHtml(s.id)}
+                                            className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
+                                            <Icon name="Trash2" size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ── VIDEOS section ── */}
+                    <div>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Videos</p>
                         <div className="grid grid-cols-2 gap-2">
-                            <div className="relative">
-                                <input type="file" ref={jsonRef} accept=".json" onChange={importJSON} className="hidden" />
-                                <button onClick={() => jsonRef.current.click()} disabled={busy}
-                                    className="w-full bg-purple-500 text-white p-2 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                            <div>
+                                <input type="file" ref={videoRef} accept="video/*" onChange={importVideoFile} className="hidden" />
+                                <button onClick={() => videoRef.current.click()} disabled={busy}
+                                    className="w-full bg-rose-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
                                     style={{ fontFamily: 'sans-serif' }}>
-                                    <Icon name="Upload" size={14} /> Import JSON
+                                    <Icon name="Upload" size={14} /> Upload File
                                 </button>
                             </div>
-                            <div className="relative">
-                                <input type="file" ref={htmlRef} accept=".html,.htm" onChange={importHTML} className="hidden" />
-                                <button onClick={() => htmlRef.current.click()} disabled={busy}
-                                    className="w-full bg-gray-500 text-white p-2 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                    style={{ fontFamily: 'sans-serif' }}>
-                                    <Icon name="Upload" size={14} /> Import HTML
-                                </button>
-                            </div>
+                            <button onClick={() => setShowUrlForm(!showUrlForm)} disabled={busy}
+                                className="w-full bg-orange-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                style={{ fontFamily: 'sans-serif' }}>
+                                🔗 Paste URL
+                            </button>
                         </div>
+
+                        {/* URL form */}
+                        {showUrlForm && (
+                            <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 mt-2 space-y-2">
+                                <input
+                                    value={videoTitle}
+                                    onChange={e => setVideoTitle(e.target.value)}
+                                    placeholder="Video title..."
+                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
+                                    style={{ fontFamily: 'sans-serif' }}
+                                />
+                                <input
+                                    value={videoUrl}
+                                    onChange={e => setVideoUrl(e.target.value)}
+                                    placeholder="YouTube, Google Drive, Dropbox, or direct URL..."
+                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
+                                    style={{ fontFamily: 'sans-serif' }}
+                                />
+                                <div className="flex gap-2">
+                                    <button onClick={() => { setShowUrlForm(false); setVideoTitle(''); setVideoUrl(''); }}
+                                        className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
+                                    <button onClick={addVideoUrl} disabled={busy}
+                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-orange-500 text-sm disabled:opacity-60">Add Video</button>
+                                </div>
+                                <p className="text-xs text-orange-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
+                                    YouTube and Google Drive links play as embeds. Dropbox and direct video links play natively.
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Video list */}
+                        {videos.length > 0 && (
+                            <div className="space-y-2 mt-3">
+                                {videos.map(v => (
+                                    <div key={v.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
+                                        <span style={{ fontSize: 22 }}>🎬</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
+                                            <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                                {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}
+                                            </p>
+                                        </div>
+                                        <button onClick={() => handleDeleteVideo(v.id)}
+                                            className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
+                                            <Icon name="Trash2" size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     {status !== '' && (
@@ -2092,388 +2091,20 @@
                         </div>
                     )}
 
-                    {/* JSON stories list */}
-                    {jsonStories.length > 0 && (
-                        <div className="space-y-2 mt-2">
-                            <p className="text-xs font-bold text-indigo-400 uppercase tracking-wide" style={{ fontFamily: 'sans-serif' }}>
-                                Interactive Stories ({jsonStories.length})
-                            </p>
-                            {jsonStories.map(s => (
-                                <div key={s.id} className="bg-white rounded-xl p-3 border border-indigo-100 flex items-center gap-3 shadow-sm">
-                                    <span style={{ fontSize: 24 }}>{s.coverEmoji || '📖'}</span>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
-                                        <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                            {(s.pages || []).length} pages{s.author ? ' - ' + s.author : ''}
-                                        </p>
-                                    </div>
-                                    <button onClick={() => { setEditingStory(s); setShowBuilder(true); }}
-                                        className="bg-indigo-50 text-indigo-400 p-2 rounded-lg hover:bg-indigo-100 transition-colors flex-shrink-0">
-                                        <Icon name="Edit" size={14} />
-                                    </button>
-                                    <button onClick={() => handleDeleteJson(s.id)}
-                                        className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
-                                        <Icon name="Trash2" size={14} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* HTML stories list */}
-                    {htmlStories.length > 0 && (
-                        <div className="space-y-2 mt-2">
-                            <p className="text-xs font-bold text-gray-400 uppercase tracking-wide" style={{ fontFamily: 'sans-serif' }}>
-                                Gemini HTML Stories ({htmlStories.length})
-                            </p>
-                            {htmlStories.map(s => (
-                                <div key={s.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
-                                        <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                            {s.pageCount || '?'} pages{s.author ? ' - ' + s.author : ''}
-                                        </p>
-                                    </div>
-                                    <button onClick={() => handleDeleteHtml(s.id)}
-                                        className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
-                                        <Icon name="Trash2" size={14} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
                     {/* Info box */}
-                    <div className="bg-indigo-50 rounded-xl p-3 border border-indigo-100">
-                        <p className="text-xs font-bold text-indigo-700 mb-1">Story formats</p>
-                        <p className="text-xs text-indigo-600 leading-relaxed">
-                            <strong>Interactive JSON:</strong> Create stories in any AI tool (ChatGPT, Gemini) using the JSON format. Supports audio, animated images, and tappable word highlights.<br />
-                            <strong>Gemini HTML:</strong> Save a Gemini story page as "Webpage, Single File" and import here.
-                        </p>
-                    </div>
-                </div>
-            );
-        };
-
-        // ── JSON STORY BUILDER (in-app creation / editing) ────────────────
-        const JsonStoryBuilder = ({ words, initial, onSave, onCancel }) => {
-            const blankPage = () => ({ text: '', nativeText: '', image: '', imageAlt: '', bgColor: '#ffffff', animation: 'none', audio: '', highlightWords: [] });
-
-            const [title, setTitle] = useState(initial ? initial.title : '');
-            const [coverEmoji, setCoverEmoji] = useState(initial ? (initial.coverEmoji || '📖') : '📖');
-            const [author, setAuthor] = useState(initial ? (initial.author || 'Seyon Hunga') : 'Seyon Hunga');
-            const [pages, setPages] = useState(initial && initial.pages && initial.pages.length ? initial.pages.map(p => ({ ...blankPage(), ...p })) : [blankPage()]);
-            const [currentPage, setCurrentPage] = useState(0);
-            const [jsonPaste, setJsonPaste] = useState('');
-            const [showJsonImport, setShowJsonImport] = useState(false);
-            const [saving, setSaving] = useState(false);
-            const audioInputRef = useRef(null);
-            const imageInputRef = useRef(null);
-
-            const page = pages[currentPage];
-
-            const updatePage = (field, value) => {
-                setPages(prev => prev.map((p, i) => i === currentPage ? { ...p, [field]: value } : p));
-            };
-
-            const addPage = () => {
-                const newPages = [...pages, blankPage()];
-                setPages(newPages);
-                setCurrentPage(newPages.length - 1);
-            };
-
-            const removePage = (idx) => {
-                if (pages.length === 1) return;
-                const newPages = pages.filter((_, i) => i !== idx);
-                setPages(newPages);
-                setCurrentPage(Math.min(currentPage, newPages.length - 1));
-            };
-
-            // Load image from file
-            const loadImage = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => updatePage('image', ev.target.result);
-                reader.readAsDataURL(file);
-                e.target.value = '';
-            };
-
-            // Load audio from file
-            const loadAudio = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => updatePage('audio', ev.target.result);
-                reader.readAsDataURL(file);
-                e.target.value = '';
-            };
-
-            // Add a highlight word to current page
-            const addHighlight = () => {
-                const hw = { word: '', wordId: '', lang: 'yoruba' };
-                updatePage('highlightWords', [...(page.highlightWords || []), hw]);
-            };
-
-            const updateHighlight = (idx, field, value) => {
-                const updated = (page.highlightWords || []).map((h, i) => i === idx ? { ...h, [field]: value } : h);
-                updatePage('highlightWords', updated);
-            };
-
-            const removeHighlight = (idx) => {
-                updatePage('highlightWords', (page.highlightWords || []).filter((_, i) => i !== idx));
-            };
-
-            // Import from pasted JSON
-            const applyJsonPaste = () => {
-                try {
-                    const data = JSON.parse(jsonPaste);
-                    if (data.title) setTitle(data.title);
-                    if (data.coverEmoji) setCoverEmoji(data.coverEmoji);
-                    if (data.author) setAuthor(data.author);
-                    if (Array.isArray(data.pages) && data.pages.length) {
-                        setPages(data.pages.map(p => ({ ...blankPage(), ...p })));
-                        setCurrentPage(0);
-                    }
-                    setShowJsonImport(false);
-                    setJsonPaste('');
-                } catch (err) {
-                    alert('Invalid JSON: ' + err.message);
-                }
-            };
-
-            const handleSave = async () => {
-                if (!title.trim()) { alert('Please give your story a title.'); return; }
-                if (pages.every(p => !p.text.trim())) { alert('At least one page needs some text.'); return; }
-                setSaving(true);
-                const story = {
-                    id: initial ? initial.id : ('jstory_' + Date.now()),
-                    title: title.trim(),
-                    coverEmoji,
-                    author,
-                    pages
-                };
-                await onSave(story);
-                setSaving(false);
-            };
-
-            // Export story as JSON for backup / sharing
-            const exportJSON = () => {
-                const story = { title: title.trim(), coverEmoji, author, pages };
-                const blob = new Blob([JSON.stringify(story, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = (title.trim() || 'story').replace(/\s+/g, '_') + '.json';
-                a.click();
-            };
-
-            if (showJsonImport) {
-                return (
-                    <div className="space-y-3">
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => { setShowJsonImport(false); setJsonPaste(''); }}
-                                className="bg-white p-2 rounded-full shadow text-gray-500">
-                                <Icon name="X" size={18} />
-                            </button>
-                            <h3 className="font-black text-gray-700 text-lg">Paste Story JSON</h3>
-                        </div>
+                    <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                        <p className="text-xs font-bold text-gray-600 mb-1">Supported video sources</p>
                         <p className="text-xs text-gray-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
-                            Generate a story in ChatGPT or Gemini using the Little Linguist JSON format, then paste it here. The format is: {'{'}"title":"...", "coverEmoji":"🦁", "pages":[{'{'}"text":"...","highlightWords":[...]'{'}'}]{'}'}
+                            <strong>Upload:</strong> mp4, webm, mov files up to 300MB stored on this device.<br />
+                            <strong>YouTube:</strong> paste any youtube.com or youtu.be link.<br />
+                            <strong>Google Drive:</strong> paste a share link - the file must be set to "Anyone with the link can view".<br />
+                            <strong>Dropbox:</strong> paste a share link - it will stream directly.
                         </p>
-                        <textarea
-                            value={jsonPaste}
-                            onChange={e => setJsonPaste(e.target.value)}
-                            placeholder={'{\n  "title": "Titi and the Mango",\n  "coverEmoji": "🥭",\n  "pages": [...]\n}'}
-                            className="w-full h-48 p-3 border-2 border-indigo-200 rounded-xl text-xs font-mono focus:outline-none focus:border-indigo-400"
-                            style={{ resize: 'vertical' }}
-                        />
-                        <div className="flex gap-2">
-                            <button onClick={() => { setShowJsonImport(false); setJsonPaste(''); }}
-                                className="flex-1 py-3 rounded-xl font-bold text-gray-500 bg-gray-100">Cancel</button>
-                            <button onClick={applyJsonPaste}
-                                className="flex-1 py-3 rounded-xl font-bold text-white bg-indigo-500">Apply</button>
-                        </div>
-                    </div>
-                );
-            }
-
-            return (
-                <div className="space-y-4">
-                    {/* Builder header */}
-                    <div className="flex items-center gap-2">
-                        <button onClick={onCancel} className="bg-white p-2 rounded-full shadow text-gray-500 flex-shrink-0">
-                            <Icon name="X" size={18} />
-                        </button>
-                        <h3 className="font-black text-gray-700 text-base flex-1">{initial ? 'Edit Story' : 'Create Story'}</h3>
-                        <button onClick={() => setShowJsonImport(true)}
-                            className="text-xs bg-purple-50 text-purple-600 px-3 py-2 rounded-lg font-bold border border-purple-100 flex-shrink-0">
-                            Paste JSON
-                        </button>
-                        <button onClick={exportJSON}
-                            className="text-xs bg-blue-50 text-blue-600 px-3 py-2 rounded-lg font-bold border border-blue-100 flex-shrink-0">
-                            Export
-                        </button>
-                    </div>
-
-                    {/* Story metadata */}
-                    <div className="bg-white rounded-xl p-3 border border-gray-100 space-y-2">
-                        <div className="flex gap-2">
-                            <input value={coverEmoji} onChange={e => setCoverEmoji(e.target.value)}
-                                className="w-14 p-2 border rounded-lg text-center text-2xl" placeholder="📖" />
-                            <input value={title} onChange={e => setTitle(e.target.value)}
-                                className="flex-1 p-2 border rounded-lg font-bold text-sm" placeholder="Story title..." />
-                        </div>
-                        <input value={author} onChange={e => setAuthor(e.target.value)}
-                            className="w-full p-2 border rounded-lg text-sm" placeholder="Author name" />
-                    </div>
-
-                    {/* Page tabs */}
-                    <div className="flex gap-1 overflow-x-auto pb-1 no-scrollbar">
-                        {pages.map((_, i) => (
-                            <button key={i} onClick={() => setCurrentPage(i)}
-                                className={'flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ' + (i === currentPage ? 'bg-indigo-500 text-white' : 'bg-white text-gray-500 border border-gray-200')}>
-                                P{i + 1}
-                            </button>
-                        ))}
-                        <button onClick={addPage}
-                            className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-indigo-500 border border-indigo-200">
-                            + Page
-                        </button>
-                    </div>
-
-                    {/* Current page editor */}
-                    <div className="bg-white rounded-xl p-3 border border-gray-100 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Page {currentPage + 1}</span>
-                            {pages.length > 1 && (
-                                <button onClick={() => removePage(currentPage)}
-                                    className="text-xs text-red-400 hover:text-red-600 font-bold">Remove page</button>
-                            )}
-                        </div>
-
-                        {/* Story text */}
-                        <div>
-                            <label className="text-xs font-bold text-gray-500 block mb-1">Story text *</label>
-                            <textarea value={page.text} onChange={e => updatePage('text', e.target.value)}
-                                className="w-full p-2 border rounded-lg text-sm focus:outline-none focus:border-indigo-400"
-                                rows={3} placeholder="Titi saw a big mango tree..." />
-                        </div>
-
-                        {/* Native text */}
-                        <div>
-                            <label className="text-xs font-bold text-gray-500 block mb-1">Native language line (optional)</label>
-                            <input value={page.nativeText} onChange={e => updatePage('nativeText', e.target.value)}
-                                className="w-full p-2 border rounded-lg text-sm focus:outline-none focus:border-indigo-400"
-                                placeholder="Yoruba or Gungbe translation..." />
-                        </div>
-
-                        {/* Image */}
-                        <div>
-                            <label className="text-xs font-bold text-gray-500 block mb-1">Page image</label>
-                            <div className="flex gap-2 items-center">
-                                <input
-                                    value={page.image && !page.image.startsWith('data:') ? page.image : ''}
-                                    onChange={e => updatePage('image', e.target.value)}
-                                    className="flex-1 p-2 border rounded-lg text-xs focus:outline-none focus:border-indigo-400"
-                                    placeholder="Paste image URL (https://...)" />
-                                <input type="file" ref={imageInputRef} accept="image/*" onChange={loadImage} className="hidden" />
-                                <button onClick={() => imageInputRef.current.click()}
-                                    className="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg text-xs font-bold flex-shrink-0">
-                                    Upload
-                                </button>
-                            </div>
-                            {page.image && (
-                                <div className="mt-2 flex items-center gap-2">
-                                    <img src={page.image} alt="" style={{ height: 48, width: 48, objectFit: 'cover', borderRadius: 8, border: '1px solid #e5e7eb' }} />
-                                    <div className="flex-1 text-xs text-gray-400 truncate">{page.image.startsWith('data:') ? 'Uploaded image' : page.image}</div>
-                                    <button onClick={() => updatePage('image', '')} className="text-red-400 text-xs font-bold">Remove</button>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Animation */}
-                        <div>
-                            <label className="text-xs font-bold text-gray-500 block mb-1">Image animation</label>
-                            <div className="flex gap-2">
-                                {['none', 'float', 'bounce', 'pulse'].map(anim => (
-                                    <button key={anim} onClick={() => updatePage('animation', anim)}
-                                        className={'px-2 py-1 rounded-lg text-xs font-bold ' + (page.animation === anim ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-500')}>
-                                        {anim}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* Page background colour */}
-                        <div>
-                            <label className="text-xs font-bold text-gray-500 block mb-1">Page background colour</label>
-                            <div className="flex gap-2 items-center">
-                                <input type="color" value={page.bgColor || '#ffffff'} onChange={e => updatePage('bgColor', e.target.value)}
-                                    style={{ width: 36, height: 36, borderRadius: 8, border: '1px solid #e5e7eb', padding: 2, cursor: 'pointer' }} />
-                                <input value={page.bgColor || '#ffffff'} onChange={e => updatePage('bgColor', e.target.value)}
-                                    className="flex-1 p-2 border rounded-lg text-xs" placeholder="#ffffff" />
-                            </div>
-                        </div>
-
-                        {/* Page narration audio */}
-                        <div>
-                            <label className="text-xs font-bold text-gray-500 block mb-1">Page narration audio (optional)</label>
-                            <div className="flex gap-2 items-center">
-                                <input type="file" ref={audioInputRef} accept="audio/*" onChange={loadAudio} className="hidden" />
-                                <button onClick={() => audioInputRef.current.click()}
-                                    className="bg-purple-50 text-purple-600 px-3 py-2 rounded-lg text-xs font-bold border border-purple-100">
-                                    {page.audio ? 'Replace audio' : 'Upload audio'}
-                                </button>
-                                {page.audio && (
-                                    <button onClick={() => updatePage('audio', '')} className="text-red-400 text-xs font-bold">Remove</button>
-                                )}
-                                {page.audio && <span className="text-xs text-green-600 font-bold">Audio loaded</span>}
-                            </div>
-                        </div>
-
-                        {/* Highlight words */}
-                        <div>
-                            <div className="flex items-center justify-between mb-1">
-                                <label className="text-xs font-bold text-gray-500">Tappable highlight words</label>
-                                <button onClick={addHighlight} className="text-xs text-indigo-500 font-bold">+ Add</button>
-                            </div>
-                            {(page.highlightWords || []).length === 0 && (
-                                <p className="text-xs text-gray-400 italic">Words in your story text that play audio when tapped.</p>
-                            )}
-                            {(page.highlightWords || []).map((hw, idx) => (
-                                <div key={idx} className="flex gap-1 items-center mt-1">
-                                    <input value={hw.word} onChange={e => updateHighlight(idx, 'word', e.target.value)}
-                                        className="flex-1 p-1 border rounded text-xs" placeholder="word in text" />
-                                    <select value={hw.wordId} onChange={e => updateHighlight(idx, 'wordId', e.target.value)}
-                                        className="flex-1 p-1 border rounded text-xs">
-                                        <option value="">-- pick word --</option>
-                                        {words.map(w => (
-                                            <option key={w.id} value={w.id}>{w.english} ({w.yoruba} / {w.gungbe})</option>
-                                        ))}
-                                    </select>
-                                    <select value={hw.lang} onChange={e => updateHighlight(idx, 'lang', e.target.value)}
-                                        className="p-1 border rounded text-xs w-20">
-                                        <option value="yoruba">Yoruba</option>
-                                        <option value="gungbe">Gungbe</option>
-                                    </select>
-                                    <button onClick={() => removeHighlight(idx)} className="text-red-400 font-bold text-xs px-1">x</button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Save / cancel */}
-                    <div className="flex gap-2">
-                        <button onClick={onCancel} className="flex-1 py-3 rounded-xl font-bold text-gray-500 bg-gray-100">Cancel</button>
-                        <button onClick={handleSave} disabled={saving}
-                            className="flex-1 py-3 rounded-xl font-bold text-white bg-indigo-500 disabled:opacity-60">
-                            {saving ? 'Saving...' : 'Save Story'}
-                        </button>
                     </div>
                 </div>
             );
         };
+
 
                         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
