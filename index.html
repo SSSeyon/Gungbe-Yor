@@ -731,7 +731,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.16.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.17.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1271,7 +1271,7 @@
                 return (
                     <div className="p-4 max-w-4xl mx-auto animate-pop">
                         <div className="flex items-center gap-4 mb-6">
-                            <button onClick={() => setView('menu')} className="bg-white p-4 rounded-full shadow hover:bg-gray-50 text-gray-500 text-2xl">🏠</button>
+                            <button onClick={() => setMode('landing')} className="bg-white p-4 rounded-full shadow hover:bg-gray-50 text-gray-500 text-2xl">🏠</button>
                             <h2 className="text-3xl font-black text-gray-700">Pick a Topic!</h2>
                         </div>
                         {wordsWithAudio.length === 0 ? (
@@ -1311,7 +1311,7 @@
             if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} />;
             if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_listen')} theme={theme} />;
             if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
-            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={() => setView('menu')} />;
+            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={() => setView('menu')} goHome={() => setMode('landing')} />;
             return null;
         };
 
@@ -1637,7 +1637,7 @@
 
 
         // ── VIDEO PLAYER ──────────────────────────────────────────────────
-        const VideoPlayer = ({ video, onBack }) => {
+        const VideoPlayer = ({ video, onBack, goHome }) => {
             const videoRef = useRef(null);
             const iframeRef = useRef(null);
             const containerRef = useRef(null);
@@ -1756,7 +1756,7 @@
                 >
                     {/* Top bar */}
                     <div style={{ background: 'rgba(0,0,0,0.75)', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 2 }}>
-                        <button onClick={handleBack}
+                        <button onClick={goHome || handleBack}
                             style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 36, height: 36, color: 'white', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                             🏠
                         </button>
@@ -1808,52 +1808,68 @@
             return true;
         };
 
-        // ── STORY SHELF (Gemini HTML stories + Videos) ────────────────────
-        const StoryShelf = ({ lang, words, playAudio, onBack }) => {
+        // ── STORY SHELF (language-filtered, syncs Firestore on load) ─────
+        const StoryShelf = ({ lang, words, playAudio, onBack, goHome }) => {
             const [htmlStories, setHtmlStories] = useState([]);
             const [videos, setVideos] = useState([]);
             const [loading, setLoading] = useState(true);
             const [activeHtml, setActiveHtml] = useState(null);
             const [activeVideo, setActiveVideo] = useState(null);
 
-            const refresh = () => {
+            const refresh = async () => {
                 setLoading(true);
-                Promise.all([dbLoadStories(), dbLoadVideos()]).then(([html, vids]) => {
-                    setHtmlStories(html);
-                    setVideos(vids);
-                    setLoading(false);
-                }).catch(() => setLoading(false));
+                try {
+                    // Pull Firestore links and merge into local DB first
+                    const remoteLinks = await fsLoadVideoLinks().catch(() => []);
+                    const localVids = await dbLoadVideos();
+                    const localIds = new Set(localVids.map(v => v.id));
+                    for (const link of remoteLinks) {
+                        if (!localIds.has(link.id)) await dbSaveVideo({ ...link, blob: null });
+                    }
+                    const [html, vids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
+                    // Filter by language: show items tagged for this lang or 'both'
+                    setHtmlStories(html.filter(s => !s.lang || s.lang === lang || s.lang === 'both'));
+                    setVideos(vids.filter(v => !v.lang || v.lang === lang || v.lang === 'both'));
+                } catch (e) {
+                    const [html, vids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
+                    setHtmlStories(html.filter(s => !s.lang || s.lang === lang || s.lang === 'both'));
+                    setVideos(vids.filter(v => !v.lang || v.lang === lang || v.lang === 'both'));
+                }
+                setLoading(false);
             };
 
-            useEffect(() => { refresh(); }, []);
+            useEffect(() => { refresh(); }, [lang]);
 
             if (activeHtml) {
-                return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} />;
+                return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} goHome={goHome} />;
             }
 
             if (activeVideo) {
-                return <VideoPlayer video={activeVideo} onBack={() => { setActiveVideo(null); refresh(); }} />;
+                return <VideoPlayer video={activeVideo} onBack={() => { setActiveVideo(null); refresh(); }} goHome={goHome} />;
             }
 
             const isEmpty = htmlStories.length === 0 && videos.length === 0;
+            const langLabel = lang === 'yoruba' ? 'Yoruba' : 'Gungbe';
 
             return (
                 <div className="p-4 max-w-2xl mx-auto animate-pop">
                     <div className="flex items-center gap-4 mb-5">
-                        <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 text-2xl">🏠</button>
-                        <h2 className="text-3xl font-black text-gray-700">Story Time 📖</h2>
+                        <button onClick={goHome} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 text-2xl">🏠</button>
+                        <div className="flex-1">
+                            <h2 className="text-3xl font-black text-gray-700">Story Time 📖</h2>
+                            <p className="text-xs font-bold text-gray-400 mt-0.5">{langLabel} stories</p>
+                        </div>
                     </div>
                     {loading ? (
                         <div className="text-center py-16 text-gray-400 font-bold text-lg">Loading...</div>
                     ) : isEmpty ? (
                         <div className="bg-white rounded-[2rem] shadow-lg p-10 text-center border-2 border-dashed border-gray-200">
                             <div className="text-6xl mb-4">📚</div>
-                            <p className="text-gray-600 font-bold text-lg mb-2">No stories yet!</p>
-                            <p className="text-gray-400 text-sm leading-relaxed">Go to Parent Zone - Stories tab to import a story or video.</p>
+                            <p className="text-gray-600 font-bold text-lg mb-2">No {langLabel} stories yet!</p>
+                            <p className="text-gray-400 text-sm leading-relaxed">Go to Parent Zone - Stories tab to import stories or videos for {langLabel}.</p>
                         </div>
                     ) : (
                         <div className="space-y-6">
-                            {/* HTML Stories section */}
                             {htmlStories.length > 0 && (
                                 <div>
                                     <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Stories 📖</p>
@@ -1879,8 +1895,6 @@
                                     </div>
                                 </div>
                             )}
-
-                            {/* Videos section */}
                             {videos.length > 0 && (
                                 <div>
                                     <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Videos 🎬</p>
@@ -1897,7 +1911,6 @@
                                                         <span className="text-8xl drop-shadow-lg">🎬</span>
                                                     )}
                                                     <div className="absolute inset-0" style={{ background: 'linear-gradient(to top,rgba(0,0,0,0.5) 0%,transparent 50%)' }} />
-                                                    {/* Play icon overlay */}
                                                     <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 52, height: 52, background: 'rgba(255,255,255,0.25)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
                                                         <span style={{ fontSize: 22, marginLeft: 3 }}>&#9654;</span>
                                                     </div>
@@ -1907,7 +1920,7 @@
                                                 </div>
                                                 <div className="px-5 py-3 flex items-center justify-between">
                                                     <div className="text-sm text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                        {video.blob ? 'Downloaded' : 'Streamed'} - {video.source || 'video'}
+                                                        {video.blob || video.cachedAt ? 'Offline' : 'Streamed'} - {video.source || 'video'}
                                                     </div>
                                                     <span className="text-xl">🎬</span>
                                                 </div>
@@ -1922,8 +1935,8 @@
             );
         };
 
-        // ── STORY VIEWER (Gemini HTML - unchanged) ────────────────────────
-        const StoryViewer = ({ story, lang, words, playAudio, onBack }) => {
+        // ── STORY VIEWER (Gemini HTML) ────────────────────────────────────
+        const StoryViewer = ({ story, lang, words, playAudio, onBack, goHome }) => {
             const iframeRef = useRef(null);
             const blobUrlRef = useRef(null);
             const [ready, setReady] = useState(false);
@@ -1959,7 +1972,7 @@
                         sandbox="allow-scripts allow-same-origin"
                     />
                     <div style={{ background: 'rgba(15,15,26,0.92)', backdropFilter: 'blur(8px)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 38, height: 38, color: 'white', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏠</button>
+                        <button onClick={goHome || onBack} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 38, height: 38, color: 'white', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏠</button>
                         <div style={{ flex: 1, textAlign: 'center' }}>
                             <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'sans-serif' }}>{story.title}</span>
                         </div>
@@ -1971,6 +1984,35 @@
             );
         };
 
+        // ── LANGUAGE PICKER MODAL ─────────────────────────────────────────
+        const LangPickerModal = ({ title, onPick, onCancel }) => (
+            <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+                <div style={{ background: 'white', borderRadius: 24, padding: 28, maxWidth: 340, width: '100%', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' }}>
+                    <p style={{ fontFamily: 'sans-serif', fontWeight: 900, fontSize: 17, color: '#1f2937', marginBottom: 6 }}>Which language is this for?</p>
+                    {title && <p style={{ fontFamily: 'sans-serif', fontSize: 13, color: '#6b7280', marginBottom: 20, fontStyle: 'italic' }}>"{title}"</p>}
+                    {!title && <div style={{ marginBottom: 20 }} />}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <button onClick={() => onPick('yoruba')}
+                            style={{ padding: '14px 0', borderRadius: 14, background: 'linear-gradient(135deg,#f59e0b,#d97706)', border: 'none', color: 'white', fontWeight: 900, fontSize: 16, cursor: 'pointer', fontFamily: 'sans-serif' }}>
+                            Yoruba 🌍
+                        </button>
+                        <button onClick={() => onPick('gungbe')}
+                            style={{ padding: '14px 0', borderRadius: 14, background: 'linear-gradient(135deg,#10b981,#059669)', border: 'none', color: 'white', fontWeight: 900, fontSize: 16, cursor: 'pointer', fontFamily: 'sans-serif' }}>
+                            Gungbe 🥁
+                        </button>
+                        <button onClick={() => onPick('both')}
+                            style={{ padding: '14px 0', borderRadius: 14, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', border: 'none', color: 'white', fontWeight: 900, fontSize: 16, cursor: 'pointer', fontFamily: 'sans-serif' }}>
+                            Both languages 🌐
+                        </button>
+                        <button onClick={onCancel}
+                            style={{ padding: '10px 0', borderRadius: 14, background: '#f3f4f6', border: 'none', color: '#6b7280', fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'sans-serif', marginTop: 4 }}>
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+
         // ── STORY IMPORTER (Parent Zone - Stories tab) ────────────────────
         const StoryImporter = ({ words }) => {
             const [htmlStories, setHtmlStories] = useState([]);
@@ -1981,8 +2023,360 @@
             const [videoTitle, setVideoTitle] = useState('');
             const [videoUrl, setVideoUrl] = useState('');
             const [showUrlForm, setShowUrlForm] = useState(false);
+            // Lang picker state
+            const [langModal, setLangModal] = useState(null); // null | { type: 'html'|'videoFile'|'videoUrl', payload: any, resolve: fn }
             const htmlRef = useRef(null);
             const videoFileRef = useRef(null);
+
+            const refresh = async () => {
+                const [html, localVids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
+                setHtmlStories(html);
+                try {
+                    const remoteLinks = await fsLoadVideoLinks();
+                    const localIds = new Set(localVids.map(v => v.id));
+                    const newRemote = remoteLinks.filter(r => !localIds.has(r.id));
+                    for (const link of newRemote) await dbSaveVideo({ ...link, blob: null });
+                    setVideos(await dbLoadVideos());
+                } catch (e) {
+                    setVideos(localVids);
+                }
+            };
+            useEffect(() => { refresh(); }, []);
+
+            const showMsg = (msg, err = false) => {
+                setStatus(msg); setIsError(err);
+                setTimeout(() => setStatus(''), 6000);
+            };
+
+            // Wrap file input trigger to show lang picker first
+            const handleHtmlClick = () => {
+                // We need the file first, then ask lang
+                htmlRef.current.click();
+            };
+
+            const handleVideoFileClick = () => {
+                videoFileRef.current.click();
+            };
+
+            // After file selected - ask lang
+            const importHTML = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                e.target.value = '';
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    setLangModal({
+                        type: 'html',
+                        payload: { htmlString: ev.target.result, fileName: file.name },
+                        title: file.name.replace(/\.[^.]+$/, '')
+                    });
+                };
+                reader.readAsText(file);
+            };
+
+            const finishImportHTML = async (htmlString, fileName, lang) => {
+                setBusy(true);
+                try {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(htmlString, 'text/html');
+                    const titleEl = doc.querySelector('title, h1');
+                    const title = titleEl ? titleEl.textContent.replace('Little Linguist |', '').trim() : fileName.replace(/\.[^.]+$/, '');
+                    const pages = doc.querySelectorAll('.page-card');
+                    const story = { id: 'story_' + Date.now(), title, pageCount: pages.length, author: 'Seyon Hunga', html: htmlString, lang };
+                    await dbSaveStory(story);
+                    await refresh();
+                    showMsg('Imported "' + story.title + '" for ' + (lang === 'both' ? 'both languages' : lang) + '!');
+                } catch (err) {
+                    showMsg('Import failed: ' + err.message, true);
+                }
+                setBusy(false);
+            };
+
+            const importVideoFile = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const sizeMB = file.size / (1024 * 1024);
+                if (sizeMB > 300) {
+                    showMsg('File is too large (' + sizeMB.toFixed(0) + 'MB). Maximum is 300MB.', true);
+                    e.target.value = '';
+                    return;
+                }
+                e.target.value = '';
+                const title = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    setLangModal({
+                        type: 'videoFile',
+                        payload: { buffer: ev.target.result, mimeType: file.type, sizeMB: Math.round(sizeMB), title },
+                        title
+                    });
+                };
+                reader.readAsArrayBuffer(file);
+            };
+
+            const finishImportVideoFile = async (buffer, mimeType, sizeMB, title, lang) => {
+                setBusy(true);
+                showMsg('Saving video...');
+                try {
+                    const blob = new Blob([buffer], { type: mimeType });
+                    const video = { id: 'video_' + Date.now(), title, source: 'file', mimeType, sizeMB, blob, thumbnail: '', url: null, lang };
+                    await dbSaveVideo(video);
+                    await refresh();
+                    showMsg('Video "' + title + '" added (' + sizeMB + 'MB)!');
+                } catch (err) {
+                    showMsg('Import failed: ' + err.message, true);
+                }
+                setBusy(false);
+            };
+
+            const addVideoUrl = () => {
+                if (!videoUrl.trim()) { showMsg('Please enter a URL.', true); return; }
+                if (!videoTitle.trim()) { showMsg('Please enter a title for this video.', true); return; }
+                setLangModal({ type: 'videoUrl', payload: { url: videoUrl.trim(), title: videoTitle.trim() }, title: videoTitle.trim() });
+            };
+
+            const finishAddVideoUrl = async (url, title, lang) => {
+                setBusy(true);
+                try {
+                    const source = url.includes('youtube.com') || url.includes('youtu.be') ? 'YouTube'
+                        : url.includes('drive.google.com') ? 'Google Drive'
+                        : url.includes('dropbox.com') ? 'Dropbox' : 'URL';
+                    const getThumbnail = (u) => {
+                        if (u.includes('youtube.com') || u.includes('youtu.be')) {
+                            let id = '';
+                            if (u.includes('youtu.be/')) id = u.split('youtu.be/')[1].split(/[?&]/)[0];
+                            else if (u.includes('v=')) id = u.split('v=')[1].split('&')[0];
+                            return id ? 'https://img.youtube.com/vi/' + id + '/hqdefault.jpg' : '';
+                        }
+                        return '';
+                    };
+                    const video = { id: 'video_' + Date.now(), title, source, url, thumbnail: getThumbnail(url), blob: null, lang };
+                    await dbSaveVideo(video);
+                    await fsSaveVideoLink(video);
+                    await refresh();
+                    showMsg('"' + title + '" added and synced to all devices!');
+                    setVideoTitle('');
+                    setVideoUrl('');
+                    setShowUrlForm(false);
+                } catch (err) {
+                    showMsg('Failed to add video: ' + err.message, true);
+                }
+                setBusy(false);
+            };
+
+            // Handle lang picker resolution
+            const onLangPick = async (lang) => {
+                const modal = langModal;
+                setLangModal(null);
+                if (!modal) return;
+                if (modal.type === 'html') await finishImportHTML(modal.payload.htmlString, modal.payload.fileName, lang);
+                else if (modal.type === 'videoFile') await finishImportVideoFile(modal.payload.buffer, modal.payload.mimeType, modal.payload.sizeMB, modal.payload.title, lang);
+                else if (modal.type === 'videoUrl') await finishAddVideoUrl(modal.payload.url, modal.payload.title, lang);
+            };
+
+            const handleDeleteHtml = async (id) => {
+                await dbDeleteStory(id);
+                await refresh();
+                showMsg('Story removed.');
+            };
+
+            const handleDeleteVideo = async (id, hasUrl) => {
+                await dbDeleteVideo(id);
+                if (hasUrl) await fsDeleteVideoLink(id).catch(() => {});
+                await refresh();
+                showMsg('Video removed.');
+            };
+
+            const [cachingId, setCachingId] = useState(null);
+            const [cacheProgress, setCacheProgress] = useState(0);
+
+            const saveForOffline = async (v) => {
+                if (!isVideoCacheable(v.url)) return;
+                setCachingId(v.id);
+                setCacheProgress(0);
+                showMsg('Downloading "' + v.title + '" for offline use...');
+                try {
+                    const res = await fetch(v.url);
+                    if (!res.ok) throw new Error('Server returned ' + res.status);
+                    const contentLength = res.headers.get('Content-Length');
+                    const total = contentLength ? parseInt(contentLength) : 0;
+                    const reader = res.body.getReader();
+                    const chunks = [];
+                    let received = 0;
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        received += value.length;
+                        if (total > 0) setCacheProgress(Math.round((received / total) * 100));
+                    }
+                    const mimeType = res.headers.get('Content-Type') || 'video/mp4';
+                    const blob = new Blob(chunks, { type: mimeType });
+                    const sizeMB = Math.round(blob.size / (1024 * 1024));
+                    const updated = { ...v, blob, mimeType, sizeMB, cachedAt: Date.now() };
+                    await dbSaveVideo(updated);
+                    await refresh();
+                    showMsg('"' + v.title + '" saved for offline use (' + sizeMB + 'MB)!');
+                } catch (err) {
+                    showMsg('Download failed: ' + err.message + '. Check the URL allows cross-origin access.', true);
+                }
+                setCachingId(null);
+                setCacheProgress(0);
+            };
+
+            const langBadge = (lang) => {
+                if (!lang || lang === 'both') return <span className="text-xs bg-purple-50 text-purple-500 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>both</span>;
+                if (lang === 'yoruba') return <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>Yoruba</span>;
+                return <span className="text-xs bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>Gungbe</span>;
+            };
+
+            return (
+                <div className="space-y-5">
+                    {/* Lang picker modal */}
+                    {langModal && (
+                        <LangPickerModal
+                            title={langModal.title}
+                            onPick={onLangPick}
+                            onCancel={() => setLangModal(null)}
+                        />
+                    )}
+
+                    {/* ── STORIES section ── */}
+                    <div>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Stories</p>
+                        <input type="file" ref={htmlRef} accept=".html,.htm" onChange={importHTML} className="hidden" />
+                        <button onClick={handleHtmlClick} disabled={busy}
+                            className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60"
+                            style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+                            <Icon name="Upload" size={16} /> Import Gemini Story (.html)
+                        </button>
+                        {htmlStories.length > 0 && (
+                            <div className="space-y-2 mt-3">
+                                {htmlStories.map(s => (
+                                    <div key={s.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
+                                        <span style={{ fontSize: 22 }}>📖</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>{s.pageCount || '?'} pages</p>
+                                                {langBadge(s.lang)}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => handleDeleteHtml(s.id)}
+                                            className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
+                                            <Icon name="Trash2" size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ── VIDEOS section ── */}
+                    <div>
+                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Videos</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <div>
+                                <input type="file" ref={videoFileRef} accept="video/*" onChange={importVideoFile} className="hidden" />
+                                <button onClick={handleVideoFileClick} disabled={busy}
+                                    className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f43f5e, #fb923c)' }}>
+                                    <Icon name="Upload" size={14} /> Upload File
+                                </button>
+                            </div>
+                            <button onClick={() => setShowUrlForm(!showUrlForm)} disabled={busy}
+                                className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #ef4444)' }}>
+                                🔗 Paste URL
+                            </button>
+                        </div>
+
+                        {showUrlForm && (
+                            <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 mt-2 space-y-2">
+                                <p className="text-xs font-bold text-orange-700" style={{ fontFamily: 'sans-serif' }}>URL links sync to all your devices automatically.</p>
+                                <input value={videoTitle} onChange={e => setVideoTitle(e.target.value)}
+                                    placeholder="Video title..."
+                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
+                                    style={{ fontFamily: 'sans-serif' }} />
+                                <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)}
+                                    placeholder="YouTube, Google Drive, Dropbox, or direct URL..."
+                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
+                                    style={{ fontFamily: 'sans-serif' }} />
+                                <div className="flex gap-2">
+                                    <button onClick={() => { setShowUrlForm(false); setVideoTitle(''); setVideoUrl(''); }}
+                                        className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
+                                    <button onClick={addVideoUrl} disabled={busy}
+                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-orange-500 text-sm disabled:opacity-60">Add + Sync</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {videos.length > 0 && (
+                            <div className="space-y-2 mt-3">
+                                {videos.map(v => {
+                                    const isCaching = cachingId === v.id;
+                                    const isCached = !!(v.blob || v.cachedAt);
+                                    const canCache = isVideoCacheable(v.url) && !isCached;
+                                    return (
+                                        <div key={v.id} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
+                                            <div className="flex items-center gap-3">
+                                                <span style={{ fontSize: 22, flexShrink: 0 }}>🎬</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
+                                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                                        <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>{v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}</p>
+                                                        {langBadge(v.lang)}
+                                                        {isCached && <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>offline</span>}
+                                                        {v.url && !isCached && !isVideoCacheable(v.url) && <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>streaming only</span>}
+                                                        {v.url && <span className="text-xs bg-blue-50 text-blue-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>synced</span>}
+                                                    </div>
+                                                </div>
+                                                {canCache && !isCaching && (
+                                                    <button onClick={() => saveForOffline(v)}
+                                                        className="bg-green-50 text-green-600 px-2 py-1.5 rounded-lg text-xs font-bold border border-green-100 flex-shrink-0"
+                                                        style={{ fontFamily: 'sans-serif' }}>
+                                                        Save offline
+                                                    </button>
+                                                )}
+                                                <button onClick={() => handleDeleteVideo(v.id, !!v.url)}
+                                                    className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
+                                                    <Icon name="Trash2" size={14} />
+                                                </button>
+                                            </div>
+                                            {isCaching && (
+                                                <div className="mt-2">
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className="text-xs text-green-600 font-bold" style={{ fontFamily: 'sans-serif' }}>Downloading...</span>
+                                                        <span className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>{cacheProgress}%</span>
+                                                    </div>
+                                                    <div className="w-full bg-gray-100 rounded-full h-1.5">
+                                                        <div className="bg-green-500 h-1.5 rounded-full transition-all" style={{ width: cacheProgress + '%' }} />
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    {status !== '' && (
+                        <div className={'text-sm p-3 rounded-xl font-medium ' + (isError ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600')}
+                            style={{ fontFamily: 'sans-serif' }}>
+                            {status}
+                        </div>
+                    )}
+
+                    <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                        <p className="text-xs font-bold text-gray-600 mb-1">Supported sources</p>
+                        <p className="text-xs text-gray-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
+                            <strong>Stories:</strong> Gemini HTML files. <strong>Upload:</strong> mp4/webm/mov up to 300MB (this device only). <strong>URL:</strong> YouTube, Drive, Dropbox - synced to all devices.
+                        </p>
+                    </div>
+                </div>
+            );
+        };
 
             const refresh = async () => {
                 const [html, localVids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
@@ -2149,165 +2543,6 @@
                 setCachingId(null);
                 setCacheProgress(0);
             };
-
-            return (
-                <div className="space-y-5">
-
-                    {/* ── STORIES section ── */}
-                    <div>
-                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Stories</p>
-                        <input type="file" ref={htmlRef} accept=".html,.htm" onChange={importHTML} className="hidden" />
-                        <button onClick={() => htmlRef.current.click()} disabled={busy}
-                            className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60"
-                            style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
-                            <Icon name="Upload" size={16} /> Import Gemini Story (.html)
-                        </button>
-                        {htmlStories.length > 0 && (
-                            <div className="space-y-2 mt-3">
-                                {htmlStories.map(s => (
-                                    <div key={s.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
-                                        <span style={{ fontSize: 22 }}>📖</span>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
-                                            <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                {s.pageCount || '?'} pages{s.author ? ' - ' + s.author : ''}
-                                            </p>
-                                        </div>
-                                        <button onClick={() => handleDeleteHtml(s.id)}
-                                            className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
-                                            <Icon name="Trash2" size={14} />
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* ── VIDEOS section ── */}
-                    <div>
-                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Videos</p>
-                        <div className="grid grid-cols-2 gap-2">
-                            <div>
-                                <input type="file" ref={videoFileRef} accept="video/*" onChange={importVideoFile} className="hidden" />
-                                <button onClick={() => videoFileRef.current.click()} disabled={busy}
-                                    className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f43f5e, #fb923c)' }}>
-                                    <Icon name="Upload" size={14} /> Upload File
-                                </button>
-                            </div>
-                            <button onClick={() => setShowUrlForm(!showUrlForm)} disabled={busy}
-                                className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #ef4444)' }}>
-                                🔗 Paste URL
-                            </button>
-                        </div>
-
-                        {/* URL form */}
-                        {showUrlForm && (
-                            <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 mt-2 space-y-2">
-                                <p className="text-xs font-bold text-orange-700" style={{ fontFamily: 'sans-serif' }}>
-                                    URL links sync to all your devices automatically.
-                                </p>
-                                <input
-                                    value={videoTitle}
-                                    onChange={e => setVideoTitle(e.target.value)}
-                                    placeholder="Video title..."
-                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
-                                    style={{ fontFamily: 'sans-serif' }}
-                                />
-                                <input
-                                    value={videoUrl}
-                                    onChange={e => setVideoUrl(e.target.value)}
-                                    placeholder="YouTube, Google Drive, Dropbox, or direct URL..."
-                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
-                                    style={{ fontFamily: 'sans-serif' }}
-                                />
-                                <div className="flex gap-2">
-                                    <button onClick={() => { setShowUrlForm(false); setVideoTitle(''); setVideoUrl(''); }}
-                                        className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
-                                    <button onClick={addVideoUrl} disabled={busy}
-                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-orange-500 text-sm disabled:opacity-60">Add + Sync</button>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Video list */}
-                        {videos.length > 0 && (
-                            <div className="space-y-2 mt-3">
-                                {videos.map(v => {
-                                    const isCaching = cachingId === v.id;
-                                    const isCached = !!(v.blob || v.cachedAt);
-                                    const canCache = isVideoCacheable(v.url) && !isCached;
-                                    return (
-                                        <div key={v.id} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
-                                            <div className="flex items-center gap-3">
-                                                <span style={{ fontSize: 22, flexShrink: 0 }}>🎬</span>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
-                                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                                        <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                            {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}
-                                                        </p>
-                                                        {isCached && (
-                                                            <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>offline</span>
-                                                        )}
-                                                        {v.url && !isCached && !isVideoCacheable(v.url) && (
-                                                            <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>streaming only</span>
-                                                        )}
-                                                        {v.url && (
-                                                            <span className="text-xs bg-blue-50 text-blue-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>synced</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                {canCache && !isCaching && (
-                                                    <button onClick={() => saveForOffline(v)}
-                                                        className="bg-green-50 text-green-600 px-2 py-1.5 rounded-lg text-xs font-bold border border-green-100 hover:bg-green-100 transition-colors flex-shrink-0"
-                                                        style={{ fontFamily: 'sans-serif' }}>
-                                                        Save offline
-                                                    </button>
-                                                )}
-                                                <button onClick={() => handleDeleteVideo(v.id, !!v.url)}
-                                                    className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
-                                                    <Icon name="Trash2" size={14} />
-                                                </button>
-                                            </div>
-                                            {isCaching && (
-                                                <div className="mt-2">
-                                                    <div className="flex items-center justify-between mb-1">
-                                                        <span className="text-xs text-green-600 font-bold" style={{ fontFamily: 'sans-serif' }}>Downloading...</span>
-                                                        <span className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>{cacheProgress}%</span>
-                                                    </div>
-                                                    <div className="w-full bg-gray-100 rounded-full h-1.5">
-                                                        <div className="bg-green-500 h-1.5 rounded-full transition-all" style={{ width: cacheProgress + '%' }} />
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
-
-                    {status !== '' && (
-                        <div className={'text-sm p-3 rounded-xl font-medium ' + (isError ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600')}
-                            style={{ fontFamily: 'sans-serif' }}>
-                            {status}
-                        </div>
-                    )}
-
-                    {/* Info box */}
-                    <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                        <p className="text-xs font-bold text-gray-600 mb-1">Supported video sources</p>
-                        <p className="text-xs text-gray-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
-                            <strong>Upload:</strong> mp4, webm, mov up to 300MB - stored on this device only.<br />
-                            <strong>URL (YouTube, Drive, Dropbox):</strong> synced to all devices automatically.<br />
-                            <strong>Dropbox / direct URL:</strong> tap "Save offline" to download for offline playback.
-                        </p>
-                    </div>
-                </div>
-            );
-        };
 
 
                         const root = ReactDOM.createRoot(document.getElementById('root'));
