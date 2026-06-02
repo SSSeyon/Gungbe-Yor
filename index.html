@@ -26,6 +26,10 @@
     <!-- Canvas Confetti for rewards -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
 
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
     <style>
         /* 3D Flip Effects */
         .perspective-1000 { perspective: 1000px; }
@@ -109,6 +113,41 @@
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
+
+        // --- FIREBASE SETUP ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyB13Vqt69P89gh8uOjjs03Fp8qG86Hn85c",
+            authDomain: "gungbe-yor.firebaseapp.com",
+            projectId: "gungbe-yor",
+            storageBucket: "gungbe-yor.firebasestorage.app",
+            messagingSenderId: "479060422213",
+            appId: "1:479060422213:web:cd85fb3ce7966518fa7d2c"
+        };
+        let db = null;
+        try {
+            if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+        } catch(e) { console.warn('Firebase init failed:', e); }
+
+        // Save a video link to Firestore (metadata only - no blob)
+        const fsSaveVideoLink = async (video) => {
+            if (!db) return;
+            const doc = { id: video.id, title: video.title, source: video.source, url: video.url, thumbnail: video.thumbnail || '', updatedAt: Date.now() };
+            await db.collection('video_links').doc(video.id).set(doc);
+        };
+
+        // Delete a video link from Firestore
+        const fsDeleteVideoLink = async (id) => {
+            if (!db) return;
+            await db.collection('video_links').doc(id).delete();
+        };
+
+        // Fetch all video links from Firestore
+        const fsLoadVideoLinks = async () => {
+            if (!db) return [];
+            const snap = await db.collection('video_links').get();
+            return snap.docs.map(d => d.data());
+        };
 
         // --- THEME CONFIGURATION ---
         const THEMES = {
@@ -435,6 +474,28 @@
             const [updateLoading, setUpdateLoading] = useState(false);
             const [localVersion, setLocalVersion] = useState('none');
 
+            // Push a history entry each time mode changes away from landing
+            // so the device back button returns within the app instead of exiting
+            const setModeWithHistory = (newMode) => {
+                if (newMode !== 'landing') {
+                    window.history.pushState({ mode: newMode }, '');
+                }
+                setMode(newMode);
+            };
+
+            useEffect(() => {
+                // Seed initial history state
+                window.history.replaceState({ mode: 'landing' }, '');
+                const handlePop = () => {
+                    setMode(prev => {
+                        if (prev === 'landing') return prev;
+                        return 'landing';
+                    });
+                };
+                window.addEventListener('popstate', handlePop);
+                return () => window.removeEventListener('popstate', handlePop);
+            }, []);
+
             useEffect(() => {
                 const savedTheme = localStorage.getItem('littleLinguistTheme');
                 if (savedTheme && THEMES[savedTheme]) setCurrentTheme(savedTheme);
@@ -583,9 +644,9 @@
                         </div>
                     )}
                     <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
-                        {mode === 'landing' && <Landing setMode={setMode} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} onBack={() => setMode('landing')} />}
-                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setMode} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
+                        {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
             );
@@ -670,7 +731,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.15.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.16.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1630,23 +1691,22 @@
                             setIsFullscreen(true);
                             return;
                         }
-                        // Standard fullscreen on container
+                        // Standard fullscreen on container - must complete before locking orientation
                         const el = containerRef.current;
                         if (el) {
                             if (el.requestFullscreen) await el.requestFullscreen();
                             else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
                             setIsFullscreen(true);
-                        }
-                        // Lock orientation to landscape
-                        if (screen.orientation && screen.orientation.lock) {
-                            await screen.orientation.lock('landscape').catch(() => {});
+                            // Lock orientation AFTER fullscreen is confirmed active (required on Android)
+                            if (screen.orientation && screen.orientation.lock) {
+                                await screen.orientation.lock('landscape').catch(() => {});
+                            }
                         }
                     } catch (e) {
                         // Fullscreen not supported or blocked - continue without it
                     }
                 };
-                // Small delay so the element is mounted
-                const t = setTimeout(enterFullscreenLandscape, 150);
+                const t = setTimeout(enterFullscreenLandscape, 200);
                 return () => clearTimeout(t);
             }, [video.id]);
 
@@ -1724,6 +1784,7 @@
                                 style={{ width: '100%', height: '100%', border: 'none' }}
                                 allow="autoplay; fullscreen; picture-in-picture"
                                 allowFullScreen
+                                sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms"
                                 title={video.title}
                             />
                         ) : (
@@ -1921,14 +1982,26 @@
             const [videoUrl, setVideoUrl] = useState('');
             const [showUrlForm, setShowUrlForm] = useState(false);
             const htmlRef = useRef(null);
-            const videoRef = useRef(null);
+            const videoFileRef = useRef(null);
 
-            const refresh = () => {
-                Promise.all([dbLoadStories(), dbLoadVideos()]).then(([html, vids]) => {
-                    setHtmlStories(html);
-                    setVideos(vids);
-                });
+            const refresh = async () => {
+                const [html, localVids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
+                setHtmlStories(html);
+                // Merge local videos with Firestore links (Firestore links have no blob)
+                try {
+                    const remoteLinks = await fsLoadVideoLinks();
+                    const localIds = new Set(localVids.map(v => v.id));
+                    const newRemote = remoteLinks.filter(r => !localIds.has(r.id));
+                    for (const link of newRemote) {
+                        await dbSaveVideo({ ...link, blob: null });
+                    }
+                    const merged = await dbLoadVideos();
+                    setVideos(merged);
+                } catch (e) {
+                    setVideos(localVids);
+                }
             };
+
             useEffect(() => { refresh(); }, []);
 
             const showMsg = (msg, err = false) => {
@@ -1963,7 +2036,7 @@
                 e.target.value = '';
             };
 
-            // Import video file
+            // Import video file (local only - not synced)
             const importVideoFile = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -1980,16 +2053,7 @@
                 reader.onload = async (ev) => {
                     try {
                         const blob = new Blob([ev.target.result], { type: file.type });
-                        const video = {
-                            id: 'video_' + Date.now(),
-                            title,
-                            source: 'file',
-                            mimeType: file.type,
-                            sizeMB: Math.round(sizeMB),
-                            blob,
-                            thumbnail: '',
-                            url: null
-                        };
+                        const video = { id: 'video_' + Date.now(), title, source: 'file', mimeType: file.type, sizeMB: Math.round(sizeMB), blob, thumbnail: '', url: null };
                         await dbSaveVideo(video);
                         await refresh();
                         showMsg('Video "' + title + '" added (' + Math.round(sizeMB) + 'MB)!');
@@ -2002,36 +2066,31 @@
                 e.target.value = '';
             };
 
-            // Add video by URL
+            // Add video by URL - saves to Firestore so all devices get it
             const addVideoUrl = async () => {
                 if (!videoUrl.trim()) { showMsg('Please enter a URL.', true); return; }
                 if (!videoTitle.trim()) { showMsg('Please enter a title for this video.', true); return; }
                 setBusy(true);
                 try {
-                    const source = videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') ? 'YouTube'
-                        : videoUrl.includes('drive.google.com') ? 'Google Drive'
-                        : videoUrl.includes('dropbox.com') ? 'Dropbox'
+                    const url = videoUrl.trim();
+                    const source = url.includes('youtube.com') || url.includes('youtu.be') ? 'YouTube'
+                        : url.includes('drive.google.com') ? 'Google Drive'
+                        : url.includes('dropbox.com') ? 'Dropbox'
                         : 'URL';
-                    const getThumbnail = (url) => {
-                        if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                    const getThumbnail = (u) => {
+                        if (u.includes('youtube.com') || u.includes('youtu.be')) {
                             let id = '';
-                            if (url.includes('youtu.be/')) id = url.split('youtu.be/')[1].split(/[?&]/)[0];
-                            else if (url.includes('v=')) id = url.split('v=')[1].split('&')[0];
+                            if (u.includes('youtu.be/')) id = u.split('youtu.be/')[1].split(/[?&]/)[0];
+                            else if (u.includes('v=')) id = u.split('v=')[1].split('&')[0];
                             return id ? 'https://img.youtube.com/vi/' + id + '/hqdefault.jpg' : '';
                         }
                         return '';
                     };
-                    const video = {
-                        id: 'video_' + Date.now(),
-                        title: videoTitle.trim(),
-                        source,
-                        url: videoUrl.trim(),
-                        thumbnail: getThumbnail(videoUrl.trim()),
-                        blob: null
-                    };
+                    const video = { id: 'video_' + Date.now(), title: videoTitle.trim(), source, url, thumbnail: getThumbnail(url), blob: null };
                     await dbSaveVideo(video);
+                    await fsSaveVideoLink(video);
                     await refresh();
-                    showMsg('Video "' + video.title + '" added!');
+                    showMsg('"' + video.title + '" added and synced to all devices!');
                     setVideoTitle('');
                     setVideoUrl('');
                     setShowUrlForm(false);
@@ -2047,8 +2106,9 @@
                 showMsg('Story removed.');
             };
 
-            const handleDeleteVideo = async (id) => {
+            const handleDeleteVideo = async (id, hasUrl) => {
                 await dbDeleteVideo(id);
+                if (hasUrl) await fsDeleteVideoLink(id).catch(() => {});
                 await refresh();
                 showMsg('Video removed.');
             };
@@ -2098,8 +2158,8 @@
                         <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Stories</p>
                         <input type="file" ref={htmlRef} accept=".html,.htm" onChange={importHTML} className="hidden" />
                         <button onClick={() => htmlRef.current.click()} disabled={busy}
-                            className="w-full bg-indigo-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60"
-                            style={{ fontFamily: 'sans-serif' }}>
+                            className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60"
+                            style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
                             <Icon name="Upload" size={16} /> Import Gemini Story (.html)
                         </button>
                         {htmlStories.length > 0 && (
@@ -2128,16 +2188,16 @@
                         <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Videos</p>
                         <div className="grid grid-cols-2 gap-2">
                             <div>
-                                <input type="file" ref={videoRef} accept="video/*" onChange={importVideoFile} className="hidden" />
-                                <button onClick={() => videoRef.current.click()} disabled={busy}
-                                    className="w-full bg-rose-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                    style={{ fontFamily: 'sans-serif' }}>
+                                <input type="file" ref={videoFileRef} accept="video/*" onChange={importVideoFile} className="hidden" />
+                                <button onClick={() => videoFileRef.current.click()} disabled={busy}
+                                    className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f43f5e, #fb923c)' }}>
                                     <Icon name="Upload" size={14} /> Upload File
                                 </button>
                             </div>
                             <button onClick={() => setShowUrlForm(!showUrlForm)} disabled={busy}
-                                className="w-full bg-orange-500 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                style={{ fontFamily: 'sans-serif' }}>
+                                className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #ef4444)' }}>
                                 🔗 Paste URL
                             </button>
                         </div>
@@ -2145,6 +2205,9 @@
                         {/* URL form */}
                         {showUrlForm && (
                             <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 mt-2 space-y-2">
+                                <p className="text-xs font-bold text-orange-700" style={{ fontFamily: 'sans-serif' }}>
+                                    URL links sync to all your devices automatically.
+                                </p>
                                 <input
                                     value={videoTitle}
                                     onChange={e => setVideoTitle(e.target.value)}
@@ -2163,11 +2226,8 @@
                                     <button onClick={() => { setShowUrlForm(false); setVideoTitle(''); setVideoUrl(''); }}
                                         className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
                                     <button onClick={addVideoUrl} disabled={busy}
-                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-orange-500 text-sm disabled:opacity-60">Add Video</button>
+                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-orange-500 text-sm disabled:opacity-60">Add + Sync</button>
                                 </div>
-                                <p className="text-xs text-orange-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
-                                    YouTube and Google Drive links play as embeds. Dropbox and direct video links play natively.
-                                </p>
                             </div>
                         )}
 
@@ -2184,19 +2244,18 @@
                                                 <span style={{ fontSize: 22, flexShrink: 0 }}>🎬</span>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
-                                                    <div className="flex items-center gap-2 mt-0.5">
+                                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                                         <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
                                                             {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}
                                                         </p>
                                                         {isCached && (
-                                                            <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>
-                                                                offline
-                                                            </span>
+                                                            <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>offline</span>
                                                         )}
-                                                        {!isCached && v.url && !isVideoCacheable(v.url) && (
-                                                            <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>
-                                                                streaming only
-                                                            </span>
+                                                        {v.url && !isCached && !isVideoCacheable(v.url) && (
+                                                            <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>streaming only</span>
+                                                        )}
+                                                        {v.url && (
+                                                            <span className="text-xs bg-blue-50 text-blue-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>synced</span>
                                                         )}
                                                     </div>
                                                 </div>
@@ -2207,7 +2266,7 @@
                                                         Save offline
                                                     </button>
                                                 )}
-                                                <button onClick={() => handleDeleteVideo(v.id)}
+                                                <button onClick={() => handleDeleteVideo(v.id, !!v.url)}
                                                     className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
                                                     <Icon name="Trash2" size={14} />
                                                 </button>
@@ -2241,10 +2300,9 @@
                     <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
                         <p className="text-xs font-bold text-gray-600 mb-1">Supported video sources</p>
                         <p className="text-xs text-gray-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
-                            <strong>Upload:</strong> mp4, webm, mov files up to 300MB - stored on this device, works offline.<br />
-                            <strong>YouTube:</strong> streams only - cannot be saved for offline.<br />
-                            <strong>Google Drive:</strong> streams only - cannot be saved for offline.<br />
-                            <strong>Dropbox / direct URL:</strong> tap "Save offline" to download and cache for offline playback.
+                            <strong>Upload:</strong> mp4, webm, mov up to 300MB - stored on this device only.<br />
+                            <strong>URL (YouTube, Drive, Dropbox):</strong> synced to all devices automatically.<br />
+                            <strong>Dropbox / direct URL:</strong> tap "Save offline" to download for offline playback.
                         </p>
                     </div>
                 </div>
