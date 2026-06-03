@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v5';
+const CACHE_NAME = 'little-linguist-v6';
 
 // CDN scripts to pre-cache on install (Tailwind is now inlined so not needed)
 const CDN_ASSETS = [
@@ -83,6 +83,24 @@ self.addEventListener('fetch', (event) => {
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
       ]).catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // Firebase Storage videos: cache-first after first play
+  // On first request, fetch and cache. On subsequent requests, serve from cache.
+  if (url.includes('firebasestorage.googleapis.com')) {
+    event.respondWith(
+      caches.match(request).then(cached => {
+        if (cached) return cached;
+        return fetch(request).then(res => {
+          // Only cache successful, non-partial responses
+          if (res.ok && res.status === 200) {
+            caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
+          }
+          return res;
+        });
+      })
     );
     return;
   }
