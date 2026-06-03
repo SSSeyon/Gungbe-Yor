@@ -646,7 +646,7 @@
                     <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
                         {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} onBack={() => setModeWithHistory('landing')} />}
-                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
+                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
             );
@@ -731,7 +731,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.16.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.20.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1173,11 +1173,26 @@
              );
         };
 
-        const KidZone = ({ words, audioCache, playAudio, setMode, theme, stickers, setStickers, stats, updateStats, settings }) => {
+        const KidZone = ({ words, audioCache, playAudio, setMode, goHome, theme, stickers, setStickers, stats, updateStats, settings }) => {
             const [view, setView] = useState('lang_pick'); // lang_pick first
             const [category, setCategory] = useState(null);
             const [lang, setLang] = useState(null);
             const [audioKeys, setAudioKeys] = useState(new Set());
+
+            // Restore last lang on mount (safe: happens after words are loaded)
+            useEffect(() => {
+                const savedLang = localStorage.getItem('ll_kid_lang_v2');
+                if (savedLang === 'gungbe' || savedLang === 'yoruba') {
+                    setLang(savedLang);
+                    setView('menu');
+                }
+            }, []);
+
+            const chooseLang = (l) => {
+                setLang(l);
+                localStorage.setItem('ll_kid_lang_v2', l);
+                setView('menu');
+            };
 
             useEffect(() => {
                 getAllAudioEntries().then(entries => {
@@ -1200,7 +1215,7 @@
                             <p className="text-white/60 font-bold">Tap to choose!</p>
                         </div>
                         <div className="flex flex-col gap-5 w-full max-w-sm">
-                            <button onClick={() => { setLang('gungbe'); setView('menu'); }}
+                            <button onClick={() => chooseLang('gungbe')}
                                 className="w-full rounded-[2rem] overflow-hidden relative active:scale-95 transition-all flex flex-col"
                                 style={{boxShadow: '0 10px 0 #14532d, 0 12px 25px rgba(0,0,0,0.4)', background: '#1a3a1a'}}>
                                 <img src={SATO_IMG} alt="Sato drum" className="w-full object-contain" style={{maxHeight: '220px'}} />
@@ -1209,7 +1224,7 @@
                                     <div className="text-white/70 font-bold text-sm">Tap to learn</div>
                                 </div>
                             </button>
-                            <button onClick={() => { setLang('yoruba'); setView('menu'); }}
+                            <button onClick={() => chooseLang('yoruba')}
                                 className="w-full rounded-[2rem] overflow-hidden relative active:scale-95 transition-all flex flex-col"
                                 style={{boxShadow: '0 10px 0 #92400e, 0 12px 25px rgba(0,0,0,0.4)', background: '#000'}}>
                                 <img src={YORUBA_IMG} alt="Yoruba woman in gele" className="w-full object-contain" style={{maxHeight: '220px'}} />
@@ -1219,7 +1234,7 @@
                                 </div>
                             </button>
                         </div>
-                        <button onClick={() => setMode('landing')} className="text-white/50 font-bold mt-2">← Back</button>
+                        <button onClick={goHome} className="text-white/50 font-bold mt-2">← Back</button>
                     </div>
                 );
             }
@@ -1257,7 +1272,7 @@
                                 <span className="text-3xl font-black text-yellow-500">Story Time</span>
                             </button>
                         </div>
-                        <button onClick={() => setMode('landing')} className="text-gray-400 font-bold mt-4 self-center">← Back to Home</button>
+                        <button onClick={goHome} className="text-gray-400 font-bold mt-4 self-center">← Back to Home</button>
                     </div>
                 );
             }
@@ -1271,7 +1286,7 @@
                 return (
                     <div className="p-4 max-w-4xl mx-auto animate-pop">
                         <div className="flex items-center gap-4 mb-6">
-                            <button onClick={() => setView('menu')} className="bg-white p-4 rounded-full shadow hover:bg-gray-50 text-gray-500 text-2xl">🏠</button>
+                            <button onClick={goHome} className="bg-white p-4 rounded-full shadow hover:bg-gray-50 text-gray-500 text-2xl">🏠</button>
                             <h2 className="text-3xl font-black text-gray-700">Pick a Topic!</h2>
                         </div>
                         {wordsWithAudio.length === 0 ? (
@@ -1304,21 +1319,21 @@
                     <div className="text-7xl mb-4">📭</div>
                     <h2 className="text-2xl font-black text-gray-600 mb-2">No words yet!</h2>
                     <p className="text-gray-400 font-medium mb-6">Check for updates or add audio in the Parent Zone.</p>
-                    <button onClick={() => setView('menu')} className="bg-white px-8 py-4 rounded-2xl font-bold text-gray-500 shadow-lg text-xl">Go Back</button>
+                    <button onClick={goHome} className="bg-white px-8 py-4 rounded-2xl font-bold text-gray-500 shadow-lg text-xl">Go Back</button>
                 </div>
             );
 
-            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_learn')} theme={theme} />;
-            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={() => setView('categories_listen')} theme={theme} />;
-            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={() => setView('categories_quiz')} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
-            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={() => setView('menu')} />;
+            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={goHome} theme={theme} />;
+            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={goHome} theme={theme} />;
+            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={goHome} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
+            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={goHome} />;
             return null;
         };
 
         const StickerBook = ({ stickers, setView }) => (
             <div className="p-4 max-w-4xl mx-auto animate-pop">
                 <div className="flex items-center gap-4 mb-6">
-                    <button onClick={() => setView('menu')} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                    <button onClick={goHome} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
                     <h2 className="text-3xl font-black text-gray-700">My Stickers! ⭐</h2>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
@@ -1818,9 +1833,22 @@
 
             const refresh = () => {
                 setLoading(true);
-                Promise.all([dbLoadStories(), dbLoadVideos()]).then(([html, vids]) => {
-                    setHtmlStories(html);
-                    setVideos(vids);
+                Promise.all([dbLoadStories(), dbLoadVideos()]).then(async ([html, localVids]) => {
+                    // Filter stories by lang (show items tagged for this lang, or untagged legacy items)
+                    setHtmlStories(html.filter(s => !s.lang || s.lang === lang));
+                    // Merge Firestore video links so they appear on all devices
+                    try {
+                        const remoteLinks = await fsLoadVideoLinks();
+                        const localIds = new Set(localVids.map(v => v.id));
+                        const newRemote = remoteLinks.filter(r => !localIds.has(r.id));
+                        for (const link of newRemote) {
+                            await dbSaveVideo({ ...link, blob: null });
+                        }
+                        const merged = await dbLoadVideos();
+                        setVideos(merged.filter(v => !v.lang || v.lang === lang));
+                    } catch (e) {
+                        setVideos(localVids.filter(v => !v.lang || v.lang === lang));
+                    }
                     setLoading(false);
                 }).catch(() => setLoading(false));
             };
@@ -1848,8 +1876,8 @@
                     ) : isEmpty ? (
                         <div className="bg-white rounded-[2rem] shadow-lg p-10 text-center border-2 border-dashed border-gray-200">
                             <div className="text-6xl mb-4">📚</div>
-                            <p className="text-gray-600 font-bold text-lg mb-2">No stories yet!</p>
-                            <p className="text-gray-400 text-sm leading-relaxed">Go to Parent Zone - Stories tab to import a story or video.</p>
+                            <p className="text-gray-600 font-bold text-lg mb-2">No {lang === 'gungbe' ? 'Gungbe' : 'Yoruba'} stories yet!</p>
+                            <p className="text-gray-400 text-sm leading-relaxed">Go to Parent Zone - Stories tab to import a story or video and assign it to {lang === 'gungbe' ? 'Gungbe' : 'Yoruba'}.</p>
                         </div>
                     ) : (
                         <div className="space-y-6">
@@ -1872,7 +1900,7 @@
                                                     <div className="text-sm text-gray-400" style={{ fontFamily: 'sans-serif' }}>
                                                         {story.pageCount || '?'} pages{story.author ? ' - by ' + story.author : ''}
                                                     </div>
-                                                    <span className="text-xl">&#9654;&#65039;</span>
+                                                    <span className="text-xl">&#9654;</span>
                                                 </div>
                                             </button>
                                         ))}
@@ -1984,6 +2012,18 @@
             const htmlRef = useRef(null);
             const videoFileRef = useRef(null);
 
+            // Language picker modal state
+            const [langPickerCallback, setLangPickerCallback] = useState(null);
+
+            const pickLang = () => new Promise((resolve) => {
+                setLangPickerCallback(() => resolve);
+            });
+
+            const onLangChosen = (lang) => {
+                setLangPickerCallback(null);
+                if (langPickerCallback) langPickerCallback(lang);
+            };
+
             const refresh = async () => {
                 const [html, localVids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
                 setHtmlStories(html);
@@ -2010,9 +2050,12 @@
             };
 
             // Import Gemini HTML story
-            const importHTML = (e) => {
+            const importHTML = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                e.target.value = '';
+                const lang = await pickLang();
+                if (!lang) { return; }
                 setBusy(true);
                 const reader = new FileReader();
                 reader.onload = async (ev) => {
@@ -2023,29 +2066,30 @@
                         const titleEl = doc.querySelector('title, h1');
                         const title = titleEl ? titleEl.textContent.replace('Little Linguist |', '').trim() : 'Untitled Story';
                         const pages = doc.querySelectorAll('.page-card');
-                        const story = { id: 'story_' + Date.now(), title, pageCount: pages.length, author: 'Seyon Hunga', html: htmlString };
+                        const story = { id: 'story_' + Date.now(), title, pageCount: pages.length, author: 'Seyon Hunga', html: htmlString, lang };
                         await dbSaveStory(story);
                         await refresh();
-                        showMsg('Imported "' + story.title + '" (' + story.pageCount + ' pages)!');
+                        showMsg('Imported "' + story.title + '" (' + story.pageCount + ' pages) for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!');
                     } catch (err) {
                         showMsg('Import failed: ' + err.message, true);
                     }
                     setBusy(false);
                 };
                 reader.readAsText(file);
-                e.target.value = '';
             };
 
             // Import video file (local only - not synced)
-            const importVideoFile = (e) => {
+            const importVideoFile = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
+                e.target.value = '';
                 const sizeMB = file.size / (1024 * 1024);
                 if (sizeMB > 300) {
                     showMsg('File is too large (' + sizeMB.toFixed(0) + 'MB). Maximum is 300MB.', true);
-                    e.target.value = '';
                     return;
                 }
+                const lang = await pickLang();
+                if (!lang) { return; }
                 setBusy(true);
                 showMsg('Importing video... this may take a moment for large files.');
                 const title = file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
@@ -2053,23 +2097,24 @@
                 reader.onload = async (ev) => {
                     try {
                         const blob = new Blob([ev.target.result], { type: file.type });
-                        const video = { id: 'video_' + Date.now(), title, source: 'file', mimeType: file.type, sizeMB: Math.round(sizeMB), blob, thumbnail: '', url: null };
+                        const video = { id: 'video_' + Date.now(), title, source: 'file', mimeType: file.type, sizeMB: Math.round(sizeMB), blob, thumbnail: '', url: null, lang };
                         await dbSaveVideo(video);
                         await refresh();
-                        showMsg('Video "' + title + '" added (' + Math.round(sizeMB) + 'MB)!');
+                        showMsg('Video "' + title + '" added (' + Math.round(sizeMB) + 'MB) for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!');
                     } catch (err) {
                         showMsg('Import failed: ' + err.message, true);
                     }
                     setBusy(false);
                 };
                 reader.readAsArrayBuffer(file);
-                e.target.value = '';
             };
 
             // Add video by URL - saves to Firestore so all devices get it
             const addVideoUrl = async () => {
                 if (!videoUrl.trim()) { showMsg('Please enter a URL.', true); return; }
                 if (!videoTitle.trim()) { showMsg('Please enter a title for this video.', true); return; }
+                const lang = await pickLang();
+                if (!lang) { return; }
                 setBusy(true);
                 try {
                     const url = videoUrl.trim();
@@ -2086,11 +2131,11 @@
                         }
                         return '';
                     };
-                    const video = { id: 'video_' + Date.now(), title: videoTitle.trim(), source, url, thumbnail: getThumbnail(url), blob: null };
+                    const video = { id: 'video_' + Date.now(), title: videoTitle.trim(), source, url, thumbnail: getThumbnail(url), blob: null, lang };
                     await dbSaveVideo(video);
                     await fsSaveVideoLink(video);
                     await refresh();
-                    showMsg('"' + video.title + '" added and synced to all devices!');
+                    showMsg('"' + video.title + '" added and synced to all devices for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!');
                     setVideoTitle('');
                     setVideoUrl('');
                     setShowUrlForm(false);
@@ -2153,6 +2198,31 @@
             return (
                 <div className="space-y-5">
 
+                    {/* Language picker modal */}
+                    {langPickerCallback && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                            <div className="bg-white rounded-3xl shadow-2xl p-7 w-full max-w-xs mx-4 text-center animate-pop">
+                                <div className="text-4xl mb-3">🌍</div>
+                                <h3 className="text-xl font-black text-gray-800 mb-1">Which language?</h3>
+                                <p className="text-gray-400 text-sm mb-5" style={{ fontFamily: 'sans-serif' }}>Choose the language for this content.</p>
+                                <div className="flex gap-3">
+                                    <button onClick={() => onLangChosen('gungbe')}
+                                        className="flex-1 py-4 rounded-2xl font-black text-white text-lg active:scale-95 transition-all"
+                                        style={{ background: 'linear-gradient(to bottom, #166534, #14532d)' }}>
+                                        Gungbe
+                                    </button>
+                                    <button onClick={() => onLangChosen('yoruba')}
+                                        className="flex-1 py-4 rounded-2xl font-black text-white text-lg active:scale-95 transition-all"
+                                        style={{ background: 'linear-gradient(to bottom, #92400e, #78350f)' }}>
+                                        Yoruba
+                                    </button>
+                                </div>
+                                <button onClick={() => { setLangPickerCallback(null); if (langPickerCallback) langPickerCallback(null); }}
+                                    className="mt-3 text-gray-400 font-bold text-sm">Cancel</button>
+                            </div>
+                        </div>
+                    )}
+
                     {/* ── STORIES section ── */}
                     <div>
                         <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Stories</p>
@@ -2170,7 +2240,7 @@
                                         <div className="flex-1 min-w-0">
                                             <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
                                             <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                {s.pageCount || '?'} pages{s.author ? ' - ' + s.author : ''}
+                                                {s.pageCount || '?'} pages{s.author ? ' - ' + s.author : ''}{s.lang ? ' | ' + (s.lang === 'gungbe' ? 'Gungbe' : 'Yoruba') : ' | All'}
                                             </p>
                                         </div>
                                         <button onClick={() => handleDeleteHtml(s.id)}
@@ -2246,7 +2316,7 @@
                                                     <p className="font-bold text-gray-700 text-sm truncate">{v.title}</p>
                                                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                                         <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                            {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}
+                                                            {v.source}{v.sizeMB ? ' - ' + v.sizeMB + 'MB' : ''}{v.lang ? ' | ' + (v.lang === 'gungbe' ? 'Gungbe' : 'Yoruba') : ' | All'}
                                                         </p>
                                                         {isCached && (
                                                             <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>offline</span>
