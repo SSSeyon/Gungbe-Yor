@@ -736,7 +736,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.20.1</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.0.1</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2243,7 +2243,7 @@
                 setCacheProgress(0);
                 showMsg('Downloading "' + v.title + '" for offline use...');
                 try {
-                    const res = await fetch(fetchUrl);
+                    const res = await fetch(fetchUrl, { mode: 'cors', redirect: 'follow' });
                     if (!res.ok) throw new Error('Server returned ' + res.status);
                     const contentLength = res.headers.get('Content-Length');
                     const total = contentLength ? parseInt(contentLength) : 0;
