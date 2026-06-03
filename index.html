@@ -132,7 +132,7 @@
         // Save a video link to Firestore (metadata only - no blob)
         const fsSaveVideoLink = async (video) => {
             if (!db) return;
-            const doc = { id: video.id, title: video.title, source: video.source, url: video.url, thumbnail: video.thumbnail || '', lang: video.lang || null, updatedAt: Date.now() };
+            const doc = { id: video.id, title: video.title, source: video.source, url: video.url, thumbnail: video.thumbnail || '', lang: video.lang || null, downloadUrl: video.downloadUrl || null, updatedAt: Date.now() };
             await db.collection('video_links').doc(video.id).set(doc);
         };
 
@@ -1815,8 +1815,11 @@
 
         // ── OFFLINE VIDEO CACHE HELPER ────────────────────────────────────
         // Determines whether a URL video is cacheable (direct fetch possible)
-        // YouTube and Google Drive block cross-origin fetch -- streaming only.
-        const isVideoCacheable = (url) => {
+        // A video is cacheable if it has a direct downloadUrl, OR if its url is a non-YouTube/Drive direct link.
+        const isVideoCacheable = (v) => {
+            if (!v) return false;
+            if (v.downloadUrl) return true; // explicit direct download link always wins
+            const url = v.url;
             if (!url) return false;
             if (url.includes('youtube.com') || url.includes('youtu.be')) return false;
             if (url.includes('drive.google.com')) return false;
@@ -2011,6 +2014,7 @@
             const [showUrlForm, setShowUrlForm] = useState(false);
             const [driveTitle, setDriveTitle] = useState('');
             const [driveUrl, setDriveUrl] = useState('');
+            const [driveDownloadUrl, setDriveDownloadUrl] = useState('');
             const [showDriveForm, setShowDriveForm] = useState(false);
             const htmlRef = useRef(null);
             const videoFileRef = useRef(null);
@@ -2113,8 +2117,8 @@
             };
 
             // Shared helper: save a URL video locally + attempt Firestore sync
-            const saveUrlVideo = async ({ title, url, lang, source, thumbnail }) => {
-                const video = { id: 'video_' + Date.now(), title: title.trim(), source, url, thumbnail: thumbnail || '', blob: null, lang };
+            const saveUrlVideo = async ({ title, url, lang, source, thumbnail, downloadUrl }) => {
+                const video = { id: 'video_' + Date.now(), title: title.trim(), source, url, thumbnail: thumbnail || '', blob: null, lang, downloadUrl: downloadUrl || null };
                 await dbSaveVideo(video);
                 await refresh();
                 fsSaveVideoLink(video).catch(e => console.warn('Firestore sync failed (video saved locally):', e.message));
@@ -2166,10 +2170,11 @@
                 if (!lang) { return; }
                 setBusy(true);
                 try {
-                    await saveUrlVideo({ title: driveTitle, url: embedUrl, lang, source: 'Google Drive', thumbnail: '' });
-                    showMsg('"' + driveTitle.trim() + '" added for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '! Syncing to other devices...');
+                    await saveUrlVideo({ title: driveTitle, url: embedUrl, lang, source: 'Google Drive', thumbnail: '', downloadUrl: driveDownloadUrl.trim() || null });
+                    showMsg('"' + driveTitle.trim() + '" added for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!' + (driveDownloadUrl.trim() ? ' Tap "Save offline" to download it.' : ' Syncing to other devices...'));
                     setDriveTitle('');
                     setDriveUrl('');
+                    setDriveDownloadUrl('');
                     setShowDriveForm(false);
                 } catch (err) {
                     showMsg('Failed to add Google Drive video: ' + err.message, true);
@@ -2194,12 +2199,13 @@
             const [cacheProgress, setCacheProgress] = useState(0);
 
             const saveForOffline = async (v) => {
-                if (!isVideoCacheable(v.url)) return;
+                if (!isVideoCacheable(v)) return;
+                const fetchUrl = v.downloadUrl || v.url;
                 setCachingId(v.id);
                 setCacheProgress(0);
                 showMsg('Downloading "' + v.title + '" for offline use...');
                 try {
-                    const res = await fetch(v.url);
+                    const res = await fetch(fetchUrl);
                     if (!res.ok) throw new Error('Server returned ' + res.status);
                     const contentLength = res.headers.get('Content-Length');
                     const total = contentLength ? parseInt(contentLength) : 0;
@@ -2352,8 +2358,27 @@
                                         ✗ No file ID detected. Check you copied the full sharing link.
                                     </p>
                                 )}
+                                <div className="bg-white rounded-lg p-3 border border-blue-100 space-y-2 mt-1">
+                                    <p className="text-xs font-black text-blue-700" style={{ fontFamily: 'sans-serif' }}>Optional: direct download link (for offline use)</p>
+                                    <p className="text-xs text-blue-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
+                                        To get this: open the file in Drive, tap <strong>⋮</strong>, tap <strong>Download</strong> — then copy the URL from your browser's download manager, or use the format:<br/>
+                                        <span style={{ fontFamily: 'monospace', fontSize: 10, wordBreak: 'break-all' }}>https://drive.google.com/uc?export=download&id=FILE_ID</span>
+                                    </p>
+                                    <input
+                                        value={driveDownloadUrl}
+                                        onChange={e => setDriveDownloadUrl(e.target.value)}
+                                        placeholder="Direct download URL (optional)..."
+                                        className="w-full p-2 border border-blue-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                                        style={{ fontFamily: 'sans-serif' }}
+                                    />
+                                    {driveDownloadUrl.trim() && (
+                                        <p className="text-xs text-blue-500 font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                            ✓ A "Save offline" button will appear on this device so you can download it.
+                                        </p>
+                                    )}
+                                </div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => { setShowDriveForm(false); setDriveTitle(''); setDriveUrl(''); }}
+                                    <button onClick={() => { setShowDriveForm(false); setDriveTitle(''); setDriveUrl(''); setDriveDownloadUrl(''); }}
                                         className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
                                     <button onClick={addDriveVideo} disabled={busy || !driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) || !driveTitle.trim()}
                                         className="flex-1 py-2 rounded-lg font-bold text-white bg-blue-600 text-sm disabled:opacity-50">Add + Sync</button>
@@ -2396,7 +2421,7 @@
                                 {videos.map(v => {
                                     const isCaching = cachingId === v.id;
                                     const isCached = !!(v.blob || v.cachedAt);
-                                    const canCache = isVideoCacheable(v.url) && !isCached;
+                                    const canCache = isVideoCacheable(v) && !isCached;
                                     return (
                                         <div key={v.id} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
                                             <div className="flex items-center gap-3">
@@ -2410,7 +2435,7 @@
                                                         {isCached && (
                                                             <span className="text-xs bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>offline</span>
                                                         )}
-                                                        {v.url && !isCached && !isVideoCacheable(v.url) && (
+                                                        {v.url && !isCached && !isVideoCacheable(v) && (
                                                             <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full font-bold" style={{ fontFamily: 'sans-serif' }}>streaming only</span>
                                                         )}
                                                         {v.url && (
