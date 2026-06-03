@@ -133,7 +133,7 @@
         const fsSaveVideoLink = async (video) => {
             if (!db) return;
             const doc = { id: video.id, title: video.title, source: video.source, url: video.url, thumbnail: video.thumbnail || '', lang: video.lang || null, downloadUrl: video.downloadUrl || null, updatedAt: Date.now() };
-            await db.collection('video_links').doc(video.id).set(doc);
+            await db.collection('video_links').doc(video.id).set(doc, { merge: true });
         };
 
         // Delete a video link from Firestore
@@ -463,7 +463,11 @@
         );
 
         const App = () => {
-            const [mode, setMode] = useState('landing');
+            // Restore mode from sessionStorage so a refresh doesn't kick back to landing
+            const [mode, setMode] = useState(() => {
+                const saved = sessionStorage.getItem('ll_mode');
+                return (saved === 'parent' || saved === 'kid_dashboard') ? saved : 'landing';
+            });
             const [words, setWords] = useState([]);
             const [audioCache, setAudioCache] = useState({});
             const [currentTheme, setCurrentTheme] = useState('boy');
@@ -477,6 +481,7 @@
             // Push a history entry each time mode changes away from landing
             // so the device back button returns within the app instead of exiting
             const setModeWithHistory = (newMode) => {
+                sessionStorage.setItem('ll_mode', newMode);
                 if (newMode !== 'landing') {
                     window.history.pushState({ mode: newMode }, '');
                 }
@@ -731,7 +736,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.20.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v1.20.1</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2116,12 +2121,17 @@
                 reader.readAsArrayBuffer(file);
             };
 
-            // Shared helper: save a URL video locally + attempt Firestore sync
+            // Shared helper: save a URL video locally + sync to Firestore (awaited, errors surface)
             const saveUrlVideo = async ({ title, url, lang, source, thumbnail, downloadUrl }) => {
                 const video = { id: 'video_' + Date.now(), title: title.trim(), source, url, thumbnail: thumbnail || '', blob: null, lang, downloadUrl: downloadUrl || null };
                 await dbSaveVideo(video);
                 await refresh();
-                fsSaveVideoLink(video).catch(e => console.warn('Firestore sync failed (video saved locally):', e.message));
+                try {
+                    await fsSaveVideoLink(video);
+                } catch (e) {
+                    console.warn('Firestore sync failed:', e.message);
+                    throw new Error('Saved on this device, but sync to other devices failed: ' + e.message + '. Check Firestore rules allow unauthenticated writes to video_links.');
+                }
                 return video;
             };
 
@@ -2158,26 +2168,54 @@
                 setBusy(false);
             };
 
+            // Extract Drive file ID from any Drive URL format
+            const extractDriveFileId = (url) => {
+                if (!url) return null;
+                // /d/FILE_ID format (sharing links)
+                const m1 = url.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+                if (m1) return m1[1];
+                // id=FILE_ID format (uc?export=download&id=... or open?id=...)
+                const m2 = url.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+                if (m2) return m2[1];
+                return null;
+            };
+
             // Add Google Drive video
             const addDriveVideo = async () => {
-                if (!driveUrl.trim()) { showMsg('Please paste a Google Drive link.', true); return; }
+                const rawUrl = driveUrl.trim();
+                const rawDownload = driveDownloadUrl.trim();
+                if (!rawUrl && !rawDownload) { showMsg('Please paste at least one Google Drive link.', true); return; }
                 if (!driveTitle.trim()) { showMsg('Please enter a title.', true); return; }
-                const match = driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
-                if (!match) { showMsg('Could not find a file ID in that link. Make sure you copied the sharing link from Google Drive.', true); return; }
-                const fileId = match[1];
-                const embedUrl = 'https://drive.google.com/file/d/' + fileId + '/preview';
+                // Determine streaming embed URL and download URL
+                let embedUrl = null;
+                let resolvedDownloadUrl = rawDownload || null;
+                // If sharing link given, build embed URL from it
+                if (rawUrl) {
+                    const fileId = extractDriveFileId(rawUrl);
+                    if (!fileId) { showMsg('Could not read a file ID from that link. Try the sharing link from Drive.', true); return; }
+                    embedUrl = 'https://drive.google.com/file/d/' + fileId + '/preview';
+                    // If no separate download URL, also build uc download from the same ID
+                    if (!resolvedDownloadUrl) {
+                        resolvedDownloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+                    }
+                } else {
+                    // Only a direct download URL given — validate it has a file ID
+                    const fileId = extractDriveFileId(rawDownload);
+                    if (!fileId) { showMsg('Could not read a file ID from the download URL. Make sure it contains an id= parameter.', true); return; }
+                    embedUrl = 'https://drive.google.com/file/d/' + fileId + '/preview';
+                }
                 const lang = await pickLang();
                 if (!lang) { return; }
                 setBusy(true);
                 try {
-                    await saveUrlVideo({ title: driveTitle, url: embedUrl, lang, source: 'Google Drive', thumbnail: '', downloadUrl: driveDownloadUrl.trim() || null });
-                    showMsg('"' + driveTitle.trim() + '" added for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!' + (driveDownloadUrl.trim() ? ' Tap "Save offline" to download it.' : ' Syncing to other devices...'));
+                    await saveUrlVideo({ title: driveTitle, url: embedUrl, lang, source: 'Google Drive', thumbnail: '', downloadUrl: resolvedDownloadUrl });
+                    showMsg('"' + driveTitle.trim() + '" added for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '! Tap "Save offline" to download for offline use.');
                     setDriveTitle('');
                     setDriveUrl('');
                     setDriveDownloadUrl('');
                     setShowDriveForm(false);
                 } catch (err) {
-                    showMsg('Failed to add Google Drive video: ' + err.message, true);
+                    showMsg('Failed: ' + err.message, true);
                 }
                 setBusy(false);
             };
@@ -2326,13 +2364,12 @@
                                     <p className="text-sm font-black text-blue-800" style={{ fontFamily: 'sans-serif' }}>Add from Google Drive</p>
                                 </div>
                                 <div className="bg-white rounded-lg p-3 border border-blue-100 space-y-1">
-                                    <p className="text-xs font-black text-blue-700" style={{ fontFamily: 'sans-serif' }}>How to get the link:</p>
-                                    <ol className="text-xs text-blue-600 space-y-1" style={{ fontFamily: 'sans-serif', paddingLeft: '1rem', listStyle: 'decimal' }}>
-                                        <li>Open Google Drive and find your video</li>
-                                        <li>Tap <strong>⋮</strong> (three dots) next to the file</li>
-                                        <li>Tap <strong>Share</strong>, then set access to <strong>Anyone with the link</strong></li>
-                                        <li>Tap <strong>Copy link</strong> and paste it below</li>
-                                    </ol>
+                                    <p className="text-xs font-black text-blue-700" style={{ fontFamily: 'sans-serif' }}>Paste either a sharing link or a direct download link.</p>
+                                    <p className="text-xs text-blue-600 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
+                                        <strong>Sharing link:</strong> In Drive tap ⋮ → Share → set to Anyone with the link → Copy link.<br/>
+                                        <strong>Direct download link:</strong> looks like <span style={{ fontFamily: 'monospace', fontSize: 10 }}>drive.google.com/uc?export=download&amp;id=...</span><br/>
+                                        Pasting either one is fine. The app auto-generates the download URL from a sharing link.
+                                    </p>
                                 </div>
                                 <input
                                     value={driveTitle}
@@ -2348,39 +2385,36 @@
                                     className="w-full p-2 border border-blue-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
                                     style={{ fontFamily: 'sans-serif' }}
                                 />
-                                {driveUrl && driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) && (
+                                {driveUrl && (driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) || driveUrl.match(/[?&]id=([a-zA-Z0-9_-]{10,})/)) && (
                                     <p className="text-xs text-green-600 font-bold" style={{ fontFamily: 'sans-serif' }}>
                                         ✓ File ID found — ready to add
                                     </p>
                                 )}
-                                {driveUrl && !driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) && (
+                                {driveUrl && !driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) && !driveUrl.match(/[?&]id=([a-zA-Z0-9_-]{10,})/) && (
                                     <p className="text-xs text-red-500 font-bold" style={{ fontFamily: 'sans-serif' }}>
-                                        ✗ No file ID detected. Check you copied the full sharing link.
+                                        ✗ No file ID detected in this link.
                                     </p>
                                 )}
                                 <div className="bg-white rounded-lg p-3 border border-blue-100 space-y-2 mt-1">
-                                    <p className="text-xs font-black text-blue-700" style={{ fontFamily: 'sans-serif' }}>Optional: direct download link (for offline use)</p>
+                                    <p className="text-xs font-black text-blue-700" style={{ fontFamily: 'sans-serif' }}>Direct download link (optional override)</p>
                                     <p className="text-xs text-blue-500 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
-                                        To get this: open the file in Drive, tap <strong>⋮</strong>, tap <strong>Download</strong> — then copy the URL from your browser's download manager, or use the format:<br/>
-                                        <span style={{ fontFamily: 'monospace', fontSize: 10, wordBreak: 'break-all' }}>https://drive.google.com/uc?export=download&id=FILE_ID</span>
+                                        Leave blank — the app auto-builds one from the sharing link above. Only fill this in if you have a custom direct link that works better.
                                     </p>
                                     <input
                                         value={driveDownloadUrl}
                                         onChange={e => setDriveDownloadUrl(e.target.value)}
-                                        placeholder="Direct download URL (optional)..."
+                                        placeholder="Leave blank to auto-generate..."
                                         className="w-full p-2 border border-blue-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
                                         style={{ fontFamily: 'sans-serif' }}
                                     />
-                                    {driveDownloadUrl.trim() && (
-                                        <p className="text-xs text-blue-500 font-bold" style={{ fontFamily: 'sans-serif' }}>
-                                            ✓ A "Save offline" button will appear on this device so you can download it.
-                                        </p>
-                                    )}
+                                    <p className="text-xs text-blue-400" style={{ fontFamily: 'sans-serif' }}>
+                                        A "Save offline" button will appear after adding so you can download the video on each device.
+                                    </p>
                                 </div>
                                 <div className="flex gap-2">
                                     <button onClick={() => { setShowDriveForm(false); setDriveTitle(''); setDriveUrl(''); setDriveDownloadUrl(''); }}
                                         className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
-                                    <button onClick={addDriveVideo} disabled={busy || !driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) || !driveTitle.trim()}
+                                    <button onClick={addDriveVideo} disabled={busy || (!driveUrl.trim() && !driveDownloadUrl.trim()) || !driveTitle.trim()}
                                         className="flex-1 py-2 rounded-lg font-bold text-white bg-blue-600 text-sm disabled:opacity-50">Add + Sync</button>
                                 </div>
                             </div>
