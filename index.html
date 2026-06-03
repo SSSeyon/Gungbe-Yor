@@ -132,7 +132,7 @@
         // Save a video link to Firestore (metadata only - no blob)
         const fsSaveVideoLink = async (video) => {
             if (!db) return;
-            const doc = { id: video.id, title: video.title, source: video.source, url: video.url, thumbnail: video.thumbnail || '', updatedAt: Date.now() };
+            const doc = { id: video.id, title: video.title, source: video.source, url: video.url, thumbnail: video.thumbnail || '', lang: video.lang || null, updatedAt: Date.now() };
             await db.collection('video_links').doc(video.id).set(doc);
         };
 
@@ -2009,6 +2009,9 @@
             const [videoTitle, setVideoTitle] = useState('');
             const [videoUrl, setVideoUrl] = useState('');
             const [showUrlForm, setShowUrlForm] = useState(false);
+            const [driveTitle, setDriveTitle] = useState('');
+            const [driveUrl, setDriveUrl] = useState('');
+            const [showDriveForm, setShowDriveForm] = useState(false);
             const htmlRef = useRef(null);
             const videoFileRef = useRef(null);
 
@@ -2109,7 +2112,16 @@
                 reader.readAsArrayBuffer(file);
             };
 
-            // Add video by URL - saves to Firestore so all devices get it
+            // Shared helper: save a URL video locally + attempt Firestore sync
+            const saveUrlVideo = async ({ title, url, lang, source, thumbnail }) => {
+                const video = { id: 'video_' + Date.now(), title: title.trim(), source, url, thumbnail: thumbnail || '', blob: null, lang };
+                await dbSaveVideo(video);
+                await refresh();
+                fsSaveVideoLink(video).catch(e => console.warn('Firestore sync failed (video saved locally):', e.message));
+                return video;
+            };
+
+            // Add video by URL
             const addVideoUrl = async () => {
                 if (!videoUrl.trim()) { showMsg('Please enter a URL.', true); return; }
                 if (!videoTitle.trim()) { showMsg('Please enter a title for this video.', true); return; }
@@ -2131,16 +2143,36 @@
                         }
                         return '';
                     };
-                    const video = { id: 'video_' + Date.now(), title: videoTitle.trim(), source, url, thumbnail: getThumbnail(url), blob: null, lang };
-                    await dbSaveVideo(video);
-                    await fsSaveVideoLink(video);
-                    await refresh();
-                    showMsg('"' + video.title + '" added and synced to all devices for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!');
+                    await saveUrlVideo({ title: videoTitle, url, lang, source, thumbnail: getThumbnail(url) });
+                    showMsg('"' + videoTitle.trim() + '" added for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '! Syncing to other devices...');
                     setVideoTitle('');
                     setVideoUrl('');
                     setShowUrlForm(false);
                 } catch (err) {
                     showMsg('Failed to add video: ' + err.message, true);
+                }
+                setBusy(false);
+            };
+
+            // Add Google Drive video
+            const addDriveVideo = async () => {
+                if (!driveUrl.trim()) { showMsg('Please paste a Google Drive link.', true); return; }
+                if (!driveTitle.trim()) { showMsg('Please enter a title.', true); return; }
+                const match = driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+                if (!match) { showMsg('Could not find a file ID in that link. Make sure you copied the sharing link from Google Drive.', true); return; }
+                const fileId = match[1];
+                const embedUrl = 'https://drive.google.com/file/d/' + fileId + '/preview';
+                const lang = await pickLang();
+                if (!lang) { return; }
+                setBusy(true);
+                try {
+                    await saveUrlVideo({ title: driveTitle, url: embedUrl, lang, source: 'Google Drive', thumbnail: '' });
+                    showMsg('"' + driveTitle.trim() + '" added for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '! Syncing to other devices...');
+                    setDriveTitle('');
+                    setDriveUrl('');
+                    setShowDriveForm(false);
+                } catch (err) {
+                    showMsg('Failed to add Google Drive video: ' + err.message, true);
                 }
                 setBusy(false);
             };
@@ -2256,27 +2288,84 @@
                     {/* ── VIDEOS section ── */}
                     <div>
                         <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Videos</p>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                             <div>
                                 <input type="file" ref={videoFileRef} accept="video/*" onChange={importVideoFile} className="hidden" />
                                 <button onClick={() => videoFileRef.current.click()} disabled={busy}
-                                    className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f43f5e, #fb923c)' }}>
-                                    <Icon name="Upload" size={14} /> Upload File
+                                    className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f43f5e, #fb923c)', minHeight: 60 }}>
+                                    <Icon name="Upload" size={14} />
+                                    <span>Upload File</span>
                                 </button>
                             </div>
-                            <button onClick={() => setShowUrlForm(!showUrlForm)} disabled={busy}
-                                className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
-                                style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #ef4444)' }}>
-                                🔗 Paste URL
+                            <button onClick={() => { setShowDriveForm(!showDriveForm); setShowUrlForm(false); }} disabled={busy}
+                                className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #1a73e8, #0d47a1)', minHeight: 60 }}>
+                                <span style={{ fontSize: 16 }}>📁</span>
+                                <span>Google Drive</span>
+                            </button>
+                            <button onClick={() => { setShowUrlForm(!showUrlForm); setShowDriveForm(false); }} disabled={busy}
+                                className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #ef4444)', minHeight: 60 }}>
+                                <span style={{ fontSize: 16 }}>🔗</span>
+                                <span>Other URL</span>
                             </button>
                         </div>
 
-                        {/* URL form */}
+                        {/* Google Drive form */}
+                        {showDriveForm && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mt-3 space-y-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span style={{ fontSize: 20 }}>📁</span>
+                                    <p className="text-sm font-black text-blue-800" style={{ fontFamily: 'sans-serif' }}>Add from Google Drive</p>
+                                </div>
+                                <div className="bg-white rounded-lg p-3 border border-blue-100 space-y-1">
+                                    <p className="text-xs font-black text-blue-700" style={{ fontFamily: 'sans-serif' }}>How to get the link:</p>
+                                    <ol className="text-xs text-blue-600 space-y-1" style={{ fontFamily: 'sans-serif', paddingLeft: '1rem', listStyle: 'decimal' }}>
+                                        <li>Open Google Drive and find your video</li>
+                                        <li>Tap <strong>⋮</strong> (three dots) next to the file</li>
+                                        <li>Tap <strong>Share</strong>, then set access to <strong>Anyone with the link</strong></li>
+                                        <li>Tap <strong>Copy link</strong> and paste it below</li>
+                                    </ol>
+                                </div>
+                                <input
+                                    value={driveTitle}
+                                    onChange={e => setDriveTitle(e.target.value)}
+                                    placeholder="Video title..."
+                                    className="w-full p-2 border border-blue-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                                    style={{ fontFamily: 'sans-serif' }}
+                                />
+                                <input
+                                    value={driveUrl}
+                                    onChange={e => setDriveUrl(e.target.value)}
+                                    placeholder="Paste Google Drive sharing link here..."
+                                    className="w-full p-2 border border-blue-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                                    style={{ fontFamily: 'sans-serif' }}
+                                />
+                                {driveUrl && driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) && (
+                                    <p className="text-xs text-green-600 font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                        ✓ File ID found — ready to add
+                                    </p>
+                                )}
+                                {driveUrl && !driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) && (
+                                    <p className="text-xs text-red-500 font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                        ✗ No file ID detected. Check you copied the full sharing link.
+                                    </p>
+                                )}
+                                <div className="flex gap-2">
+                                    <button onClick={() => { setShowDriveForm(false); setDriveTitle(''); setDriveUrl(''); }}
+                                        className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
+                                    <button onClick={addDriveVideo} disabled={busy || !driveUrl.match(/\/d\/([a-zA-Z0-9_-]{10,})/) || !driveTitle.trim()}
+                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-blue-600 text-sm disabled:opacity-50">Add + Sync</button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Other URL form */}
                         {showUrlForm && (
                             <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 mt-2 space-y-2">
                                 <p className="text-xs font-bold text-orange-700" style={{ fontFamily: 'sans-serif' }}>
-                                    URL links sync to all your devices automatically.
+                                    For YouTube, Dropbox, or any direct video URL. Syncs to all your devices.
                                 </p>
                                 <input
                                     value={videoTitle}
@@ -2288,7 +2377,7 @@
                                 <input
                                     value={videoUrl}
                                     onChange={e => setVideoUrl(e.target.value)}
-                                    placeholder="YouTube, Google Drive, Dropbox, or direct URL..."
+                                    placeholder="YouTube, Dropbox, or direct video URL..."
                                     className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
                                     style={{ fontFamily: 'sans-serif' }}
                                 />
