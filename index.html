@@ -29,6 +29,7 @@
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 
     <style>
         /* 3D Flip Effects */
@@ -124,9 +125,11 @@
             appId: "1:479060422213:web:cd85fb3ce7966518fa7d2c"
         };
         let db = null;
+        let storage = null;
         try {
             if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
             db = firebase.firestore();
+            storage = firebase.storage();
         } catch(e) { console.warn('Firebase init failed:', e); }
 
         // Save a video link to Firestore (metadata only - no blob)
@@ -148,6 +151,25 @@
             const snap = await db.collection('video_links').get();
             return snap.docs.map(d => d.data());
         };
+
+        // Upload a video file to Firebase Storage and return the download URL
+        const fsUploadVideo = (file, onProgress) => new Promise((resolve, reject) => {
+            if (!storage) { reject(new Error('Firebase Storage not initialised')); return; }
+            const path = 'videos/' + Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const ref = storage.ref().child(path);
+            const task = ref.put(file);
+            task.on('state_changed',
+                (snap) => {
+                    const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
+                    if (onProgress) onProgress(pct);
+                },
+                (err) => reject(err),
+                async () => {
+                    const url = await task.snapshot.ref.getDownloadURL();
+                    resolve(url);
+                }
+            );
+        });
 
         // --- THEME CONFIGURATION ---
         const THEMES = {
@@ -2021,6 +2043,10 @@
             const [driveUrl, setDriveUrl] = useState('');
             const [driveDownloadUrl, setDriveDownloadUrl] = useState('');
             const [showDriveForm, setShowDriveForm] = useState(false);
+            const [showFirebaseForm, setShowFirebaseForm] = useState(false);
+            const [firebaseTitle, setFirebaseTitle] = useState('');
+            const [firebaseUploadProgress, setFirebaseUploadProgress] = useState(null);
+            const firebaseFileRef = useRef(null);
             const htmlRef = useRef(null);
             const videoFileRef = useRef(null);
 
@@ -2135,6 +2161,35 @@
                 return video;
             };
 
+            // Upload video to Firebase Storage
+            const addFirebaseVideo = async () => {
+                const file = firebaseFileRef.current && firebaseFileRef.current.files[0];
+                if (!file) { showMsg('Please choose a video file.', true); return; }
+                if (!firebaseTitle.trim()) { showMsg('Please enter a title.', true); return; }
+                const sizeMB = file.size / (1024 * 1024);
+                if (sizeMB > 500) { showMsg('File is too large (' + sizeMB.toFixed(0) + 'MB). Maximum is 500MB.', true); return; }
+                const lang = await pickLang();
+                if (!lang) { return; }
+                setBusy(true);
+                setFirebaseUploadProgress(0);
+                showMsg('Uploading to Firebase Storage...');
+                try {
+                    const downloadUrl = await fsUploadVideo(file, (pct) => {
+                        setFirebaseUploadProgress(pct);
+                        showMsg('Uploading... ' + pct + '%');
+                    });
+                    await saveUrlVideo({ title: firebaseTitle, url: downloadUrl, downloadUrl: downloadUrl, lang, source: 'Firebase' });
+                    showMsg(' + firebaseTitle.trim() +  uploaded and synced! Save offline works on any device.');
+                    setFirebaseTitle('');
+                    setShowFirebaseForm(false);
+                    if (firebaseFileRef.current) firebaseFileRef.current.value = '';
+                } catch (err) {
+                    showMsg('Upload failed: ' + err.message, true);
+                }
+                setFirebaseUploadProgress(null);
+                setBusy(false);
+            };
+
             // Add video by URL
             const addVideoUrl = async () => {
                 if (!videoUrl.trim()) { showMsg('Please enter a URL.', true); return; }
@@ -2243,7 +2298,7 @@
                 setCacheProgress(0);
                 showMsg('Downloading "' + v.title + '" for offline use...');
                 try {
-                    const res = await fetch(fetchUrl, { mode: 'cors', redirect: 'follow' });
+                    const res = await fetch(fetchUrl);
                     if (!res.ok) throw new Error('Server returned ' + res.status);
                     const contentLength = res.headers.get('Content-Length');
                     const total = contentLength ? parseInt(contentLength) : 0;
@@ -2332,29 +2387,78 @@
                     {/* ── VIDEOS section ── */}
                     <div>
                         <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Videos</p>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 gap-2">
                             <div>
                                 <input type="file" ref={videoFileRef} accept="video/*" onChange={importVideoFile} className="hidden" />
                                 <button onClick={() => videoFileRef.current.click()} disabled={busy}
                                     className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
                                     style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f43f5e, #fb923c)', minHeight: 60 }}>
                                     <Icon name="Upload" size={14} />
-                                    <span>Upload File</span>
+                                    <span>Device File</span>
                                 </button>
                             </div>
-                            <button onClick={() => { setShowDriveForm(!showDriveForm); setShowUrlForm(false); }} disabled={busy}
+                            <div>
+                                <input type="file" ref={firebaseFileRef} accept="video/*" className="hidden" onChange={() => setFirebaseUploadProgress(null)} />
+                                <button onClick={() => { setShowFirebaseForm(!showFirebaseForm); setShowDriveForm(false); setShowUrlForm(false); }} disabled={busy}
+                                    className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
+                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f97316, #dc2626)', minHeight: 60 }}>
+                                    <span style={{ fontSize: 16 }}>☁️</span>
+                                    <span>Firebase Upload</span>
+                                </button>
+                            </div>
+                            <button onClick={() => { setShowDriveForm(!showDriveForm); setShowUrlForm(false); setShowFirebaseForm(false); }} disabled={busy}
                                 className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
                                 style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #1a73e8, #0d47a1)', minHeight: 60 }}>
                                 <span style={{ fontSize: 16 }}>📁</span>
                                 <span>Google Drive</span>
                             </button>
-                            <button onClick={() => { setShowUrlForm(!showUrlForm); setShowDriveForm(false); }} disabled={busy}
+                            <button onClick={() => { setShowUrlForm(!showUrlForm); setShowDriveForm(false); setShowFirebaseForm(false); }} disabled={busy}
                                 className="w-full text-white p-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 text-xs active:scale-95 transition-all disabled:opacity-60"
                                 style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #ef4444)', minHeight: 60 }}>
                                 <span style={{ fontSize: 16 }}>🔗</span>
                                 <span>Other URL</span>
                             </button>
                         </div>
+
+                        {/* Firebase Upload form */}
+                        {showFirebaseForm && (
+                            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mt-3 space-y-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span style={{ fontSize: 20 }}>☁️</span>
+                                    <p className="text-sm font-black text-orange-800" style={{ fontFamily: 'sans-serif' }}>Upload to Firebase Storage</p>
+                                </div>
+                                <p className="text-xs text-orange-700 leading-relaxed" style={{ fontFamily: 'sans-serif' }}>
+                                    Video uploads directly to Firebase. Once uploaded, Save offline works on any device.
+                                </p>
+                                <input
+                                    value={firebaseTitle}
+                                    onChange={e => setFirebaseTitle(e.target.value)}
+                                    placeholder="Video title..."
+                                    className="w-full p-2 border border-orange-200 rounded-lg text-sm focus:outline-none focus:border-orange-400"
+                                    style={{ fontFamily: 'sans-serif' }}
+                                />
+                                <div className="border-2 border-dashed border-orange-300 rounded-lg p-3 text-center"
+                                    onClick={() => firebaseFileRef.current && firebaseFileRef.current.click()}
+                                    style={{ cursor: 'pointer' }}>
+                                    <p className="text-xs text-orange-600 font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                        {firebaseFileRef.current && firebaseFileRef.current.files && firebaseFileRef.current.files[0]
+                                            ? firebaseFileRef.current.files[0].name
+                                            : 'Tap to choose video file'}
+                                    </p>
+                                </div>
+                                {firebaseUploadProgress !== null && (
+                                    <div className="w-full bg-orange-100 rounded-full h-3">
+                                        <div className="bg-orange-500 h-3 rounded-full transition-all" style={{ width: firebaseUploadProgress + '%' }}></div>
+                                    </div>
+                                )}
+                                <div className="flex gap-2">
+                                    <button onClick={() => { setShowFirebaseForm(false); setFirebaseTitle(''); if (firebaseFileRef.current) firebaseFileRef.current.value = ''; }}
+                                        className="flex-1 py-2 rounded-lg font-bold text-gray-500 bg-white border border-gray-200 text-sm">Cancel</button>
+                                    <button onClick={addFirebaseVideo} disabled={busy || !firebaseTitle.trim()}
+                                        className="flex-1 py-2 rounded-lg font-bold text-white bg-orange-500 text-sm disabled:opacity-50">Upload + Sync</button>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Google Drive form */}
                         {showDriveForm && (
