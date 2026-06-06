@@ -528,8 +528,26 @@
                 if (savedTheme && THEMES[savedTheme]) setCurrentTheme(savedTheme);
 
                 const savedWords = localStorage.getItem('littleLinguistWords_v3');
-                if (savedWords) setWords(JSON.parse(savedWords));
-                else { setWords(INITIAL_DATA); localStorage.setItem('littleLinguistWords_v3', JSON.stringify(INITIAL_DATA)); }
+                if (savedWords) {
+                    setWords(JSON.parse(savedWords));
+                } else {
+                    // No local words - try fetching fresh from remote first, fall back to INITIAL_DATA
+                    setWords(INITIAL_DATA); // render something immediately
+                    fetch(REMOTE_WORDS_URL + '?t=' + Date.now())
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.words && data.words.length) {
+                                setWords(data.words);
+                                localStorage.setItem('littleLinguistWords_v3', JSON.stringify(data.words));
+                                if (data.version) localStorage.setItem('ll_words_version', data.version);
+                                setUpdateAvailable(null); // no banner needed - already up to date
+                            }
+                        })
+                        .catch(() => {
+                            // Network unavailable - keep INITIAL_DATA, save it so app works offline
+                            localStorage.setItem('littleLinguistWords_v3', JSON.stringify(INITIAL_DATA));
+                        });
+                }
 
                 const savedStickers = localStorage.getItem('ll_stickers');
                 if(savedStickers) setStickers(JSON.parse(savedStickers));
@@ -758,7 +776,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.0.3</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.0.4</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
