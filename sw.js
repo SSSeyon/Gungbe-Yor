@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v6';
+const CACHE_NAME = 'little-linguist-v7';
 
 // CDN scripts to pre-cache on install (Tailwind is now inlined so not needed)
 const CDN_ASSETS = [
@@ -104,6 +104,9 @@ self.addEventListener('fetch', (event) => {
     );
     return;
   }
+
+  // Requests with cache-buster (?t=...) go straight to network - never intercept
+  if (url.includes('?t=')) return;
 
   // Local origin files: network-first, fall back to cache for offline
   if (url.startsWith(self.location.origin)) {

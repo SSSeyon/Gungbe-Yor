@@ -533,7 +533,7 @@
                 } else {
                     // No local words - try fetching fresh from remote first, fall back to INITIAL_DATA
                     setWords(INITIAL_DATA); // render something immediately
-                    fetch(REMOTE_WORDS_URL + '?t=' + Date.now())
+                    fetch(REMOTE_WORDS_URL + '?t=' + Date.now(), { cache: 'no-store' })
                         .then(r => r.json())
                         .then(data => {
                             if (data.words && data.words.length) {
@@ -578,7 +578,7 @@
                 if (!updateAvailable) return;
                 setUpdateLoading(true);
                 try {
-                    const res = await fetch(REMOTE_WORDS_URL + '?t=' + Date.now());
+                    const res = await fetch(REMOTE_WORDS_URL + '?t=' + Date.now(), { cache: 'no-store' });
                     const data = await res.json();
 
                     // Always update words (text only, tiny)
@@ -623,7 +623,7 @@
                     localStorage.setItem('ll_words_version', updateAvailable);
                     setLocalVersion(updateAvailable);
                     setUpdateAvailable(null);
-                } catch(e) { alert('Update failed: ' + e.message); }
+                } catch(e) { showMsg('Update failed: ' + e.message + '. Check your connection and try again.', true); }
                 setUpdateLoading(false);
             };
 
@@ -776,7 +776,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.0.4</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.0.5</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
