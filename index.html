@@ -171,6 +171,89 @@
             );
         });
 
+        // --- FIRESTORE STORY SYNC HELPERS ---
+        // Story HTML is chunked across Firestore documents (1MB per doc limit),
+        // so no Firebase Storage CORS configuration is required. Metadata lives
+        // in the story_links collection; HTML chunks live in story_chunks with
+        // deterministic document IDs of the form {storyId}_{chunkIndex}.
+        const STORY_CHUNK_SIZE = 500000; // characters per chunk, well under 1MiB
+
+        const fsSaveStoryLink = async (story) => {
+            if (!db) throw new Error('Firestore not initialised');
+            const html = story.html || '';
+            if (html.length > 4500000) throw new Error('Story is too large to sync (over ~4.5MB).');
+            const chunkCount = Math.max(1, Math.ceil(html.length / STORY_CHUNK_SIZE));
+            for (let i = 0; i < chunkCount; i++) {
+                const data = html.slice(i * STORY_CHUNK_SIZE, (i + 1) * STORY_CHUNK_SIZE);
+                await db.collection('story_chunks').doc(story.id + '_' + i).set({ storyId: story.id, index: i, data }, { merge: true });
+            }
+            const meta = { id: story.id, title: story.title, pageCount: story.pageCount || 0, author: story.author || '', lang: story.lang || null, chunkCount, updatedAt: Date.now() };
+            await db.collection('story_links').doc(story.id).set(meta, { merge: true });
+        };
+
+        // Update only a story's metadata (title / language) - no chunk re-upload
+        const fsUpdateStoryMeta = async (story) => {
+            if (!db) return;
+            const docRef = db.collection('story_links').doc(story.id);
+            const snap = await docRef.get();
+            if (!snap.exists) return; // never synced - nothing to update remotely
+            await docRef.set({ title: story.title, lang: story.lang || null, updatedAt: Date.now() }, { merge: true });
+        };
+
+        const fsLoadStoryLinks = async () => {
+            if (!db) return [];
+            const snap = await db.collection('story_links').get();
+            return snap.docs.map(d => d.data());
+        };
+
+        // How many chunks a synced story has (0 means it was never synced)
+        const fsGetStoryChunkCount = async (id) => {
+            if (!db) return 0;
+            const snap = await db.collection('story_links').doc(id).get();
+            return snap.exists ? (snap.data().chunkCount || 1) : 0;
+        };
+
+        // Download and reassemble a story's HTML from its Firestore chunks
+        const fsFetchStoryHtml = async (link) => {
+            if (!db) throw new Error('Firestore not initialised');
+            const parts = [];
+            for (let i = 0; i < (link.chunkCount || 1); i++) {
+                const snap = await db.collection('story_chunks').doc(link.id + '_' + i).get();
+                if (!snap.exists) throw new Error('Missing story chunk ' + i);
+                parts.push(snap.data().data || '');
+            }
+            return parts.join('');
+        };
+
+        const fsDeleteStoryLink = async (id, chunkCount) => {
+            if (!db) return;
+            const count = chunkCount || 1;
+            for (let i = 0; i < count; i++) {
+                await db.collection('story_chunks').doc(id + '_' + i).delete().catch(() => {});
+            }
+            await db.collection('story_links').doc(id).delete();
+        };
+
+        // Pull any remote stories this device does not have yet into IndexedDB.
+        // Returns { changed, links } so callers can refresh their lists.
+        const mergeRemoteStories = async () => {
+            const links = await fsLoadStoryLinks();
+            const local = await dbLoadStories();
+            const localIds = new Set(local.map(s => s.id));
+            let changed = false;
+            for (const link of links) {
+                if (localIds.has(link.id)) continue;
+                try {
+                    const fetchedHtml = await fsFetchStoryHtml(link);
+                    await dbSaveStory({ id: link.id, title: link.title, pageCount: link.pageCount || 0, author: link.author || '', html: fetchedHtml, lang: link.lang || null });
+                    changed = true;
+                } catch (e) {
+                    console.warn('Could not download story ' + link.id + ':', e.message);
+                }
+            }
+            return { changed, links };
+        };
+
         // --- THEME CONFIGURATION ---
         const THEMES = {
             boy: {
@@ -485,11 +568,12 @@
         );
 
         const App = () => {
-            // Restore mode from sessionStorage so a refresh doesn't kick back to landing
-            const [mode, setMode] = useState(() => {
-                const saved = sessionStorage.getItem('ll_mode');
-                return (saved === 'parent' || saved === 'kid_dashboard') ? saved : 'landing';
-            });
+            // Mode always starts at 'landing'; the real location is restored in an
+            // effect after words have loaded (never during useState - see handover rules)
+            const [mode, setMode] = useState('landing');
+            const modeRef = useRef('landing');
+            const kidBackRef = useRef(null);
+            useEffect(() => { modeRef.current = mode; }, [mode]);
             const [words, setWords] = useState([]);
             const [audioCache, setAudioCache] = useState({});
             const [currentTheme, setCurrentTheme] = useState('boy');
@@ -503,7 +587,8 @@
             // Push a history entry each time mode changes away from landing
             // so the device back button returns within the app instead of exiting
             const setModeWithHistory = (newMode) => {
-                sessionStorage.setItem('ll_mode', newMode);
+                localStorage.setItem('ll_nav_mode', newMode);
+                if (newMode === 'landing') localStorage.removeItem('ll_kid_nav_v1');
                 if (newMode !== 'landing') {
                     window.history.pushState({ mode: newMode }, '');
                 }
@@ -514,10 +599,17 @@
                 // Seed initial history state
                 window.history.replaceState({ mode: 'landing' }, '');
                 const handlePop = () => {
-                    setMode(prev => {
-                        if (prev === 'landing') return prev;
-                        return 'landing';
-                    });
+                    // Let the Kid Zone step back one view first; only return to the
+                    // landing screen when there is nothing left to step back through
+                    if (modeRef.current === 'kid_dashboard' && kidBackRef.current && kidBackRef.current()) {
+                        window.history.pushState({ mode: 'kid_dashboard' }, '');
+                        return;
+                    }
+                    if (modeRef.current !== 'landing') {
+                        localStorage.setItem('ll_nav_mode', 'landing');
+                        localStorage.removeItem('ll_kid_nav_v1');
+                        setMode('landing');
+                    }
                 };
                 window.addEventListener('popstate', handlePop);
                 return () => window.removeEventListener('popstate', handlePop);
@@ -558,6 +650,14 @@
                 const savedSettings = localStorage.getItem('ll_settings');
                 if(savedSettings) {
                     setSettings({ autoPlayAudio: true, flashcardFront: 'english', ...JSON.parse(savedSettings) });
+                }
+
+                // Restore where the user was when they left the app. This runs in an
+                // effect AFTER words have been loaded above (never during useState).
+                const savedMode = localStorage.getItem('ll_nav_mode');
+                if (savedMode === 'parent' || savedMode === 'kid_dashboard') {
+                    window.history.pushState({ mode: savedMode }, '');
+                    setMode(savedMode);
                 }
 
                 // Check for remote update on every launch using tiny version.json only
@@ -691,7 +791,7 @@
                     <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
                         {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} onBack={() => setModeWithHistory('landing')} />}
-                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
+                        {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
             );
@@ -756,7 +856,7 @@
                             <p className="text-white/80 font-bold text-lg">Let's learn together!</p>
                         </div>
 
-                        <button onClick={() => setMode('kid_dashboard')}
+                        <button onClick={() => { localStorage.removeItem('ll_kid_nav_v1'); setMode('kid_dashboard'); }}
                             className="w-full max-w-xs py-10 rounded-[2.5rem] font-black text-4xl text-white flex flex-col items-center gap-3 transition-all active:scale-95"
                             style={{background: 'linear-gradient(to bottom, #f9a825, #f57f17)', boxShadow: '0 10px 0 #e65100, 0 12px 20px rgba(0,0,0,0.3)'}}>
                             <span className="text-6xl">{currentTheme === 'girl' ? '👧🏾' : '👦🏾'}</span>
@@ -776,7 +876,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.0.5</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.1.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1218,25 +1318,67 @@
              );
         };
 
-        const KidZone = ({ words, audioCache, playAudio, setMode, goHome, theme, stickers, setStickers, stats, updateStats, settings }) => {
+        const KidZone = ({ words, audioCache, playAudio, setMode, goHome, theme, stickers, setStickers, stats, updateStats, settings, registerBack }) => {
             const [view, setView] = useState('lang_pick'); // lang_pick first
             const [category, setCategory] = useState(null);
             const [lang, setLang] = useState(null);
             const [audioKeys, setAudioKeys] = useState(new Set());
+            const [navStack, setNavStack] = useState([]);
+            const navRef = useRef({ view: 'lang_pick', category: null, stack: [] });
+            const shelfBackRef = useRef(null);
+            useEffect(() => { navRef.current = { view, category, stack: navStack }; });
 
-            // Restore last lang on mount (safe: happens after words are loaded)
+            // Restore the exact spot the child was at when the app was last left.
+            // Runs in an effect (never during useState) so words are already loaded.
+            // A fresh tap on Let's Play clears this state, so that path always
+            // starts at the language picker.
             useEffect(() => {
-                const savedLang = localStorage.getItem('ll_kid_lang_v2');
-                if (savedLang === 'gungbe' || savedLang === 'yoruba') {
-                    setLang(savedLang);
-                    setView('menu');
-                }
+                try {
+                    const saved = JSON.parse(localStorage.getItem('ll_kid_nav_v1') || 'null');
+                    if (saved && saved.view && (saved.view === 'lang_pick' || saved.lang === 'gungbe' || saved.lang === 'yoruba')) {
+                        if (saved.lang === 'gungbe' || saved.lang === 'yoruba') setLang(saved.lang);
+                        if (saved.category) setCategory(saved.category);
+                        setNavStack(Array.isArray(saved.stack) ? saved.stack : []);
+                        setView(saved.view);
+                    }
+                } catch (e) { /* corrupted nav state - start fresh at lang_pick */ }
+            }, []);
+
+            // Persist the current location so leaving the app never loses our place
+            useEffect(() => {
+                localStorage.setItem('ll_kid_nav_v1', JSON.stringify({ view, lang, category, stack: navStack }));
+            }, [view, lang, category, navStack]);
+
+            // Forward navigation: remember where we came from so back can retrace it
+            const goForward = (nextView, nextCategory) => {
+                setNavStack(prev => [...prev, { view, category }]);
+                if (nextCategory !== undefined) setCategory(nextCategory);
+                setView(nextView);
+            };
+
+            // Step back exactly one view. Returns true if handled inside the Kid Zone.
+            const stepBack = () => {
+                if (shelfBackRef.current && shelfBackRef.current()) return true;
+                const nav = navRef.current;
+                if (!nav.stack.length) return false;
+                const prev = nav.stack[nav.stack.length - 1];
+                setNavStack(nav.stack.slice(0, -1));
+                setView(prev.view);
+                setCategory(prev.category !== undefined ? prev.category : null);
+                return true;
+            };
+            const backOrHome = () => { if (!stepBack()) goHome(); };
+
+            // Let the App route the device back button through stepBack
+            useEffect(() => {
+                if (registerBack) registerBack(stepBack);
+                return () => { if (registerBack) registerBack(null); };
             }, []);
 
             const chooseLang = (l) => {
                 setLang(l);
                 localStorage.setItem('ll_kid_lang_v2', l);
-                setView('menu');
+                goForward('menu');
             };
 
             useEffect(() => {
@@ -1289,30 +1431,30 @@
                 return (
                     <div className="p-4 max-w-2xl mx-auto flex flex-col gap-6 animate-pop">
                         <div className="flex items-center justify-between mb-2">
-                            <button onClick={() => setView('lang_pick')} className="bg-white/80 px-3 py-2 rounded-full font-bold text-gray-700 shadow text-sm flex items-center gap-2">
+                            <button onClick={() => { if (!stepBack()) { setNavStack([]); setView('lang_pick'); } }} className="bg-white/80 px-3 py-2 rounded-full font-bold text-gray-700 shadow text-sm flex items-center gap-2">
                                 <img src={lang === 'gungbe' ? SATO_IMG : YORUBA_IMG} alt={lang}
                                     className="w-7 h-7 rounded-full object-cover" />
                                 {lang === 'gungbe' ? 'Gungbe' : 'Yoruba'} ↩
                             </button>
-                            <button onClick={() => setView('stickers')} className="bg-white p-3 rounded-2xl shadow-lg flex flex-col items-center min-w-[70px]">
+                            <button onClick={() => goForward('stickers')} className="bg-white p-3 rounded-2xl shadow-lg flex flex-col items-center min-w-[70px]">
                                 <span className="text-3xl">⭐</span>
                                 <span className="text-xs font-bold text-gray-400">{stickers.length} Stickers</span>
                             </button>
                         </div>
                         <div className="grid grid-cols-1 gap-5">
-                            <button onClick={() => setView('categories_learn')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
+                            <button onClick={() => goForward('categories_learn')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
                                 <span className="text-8xl block mb-4 drop-shadow-md">📚</span>
                                 <span className={`text-3xl font-black ${theme.accentText}`}>Learn Words</span>
                             </button>
-                            <button onClick={() => setView('categories_listen')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-purple-200">
+                            <button onClick={() => goForward('categories_listen')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-purple-200">
                                 <span className="text-8xl block mb-4 drop-shadow-md">👂</span>
                                 <span className="text-3xl font-black text-purple-600">Listen & Repeat</span>
                             </button>
-                            <button onClick={() => setView('categories_quiz')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
+                            <button onClick={() => goForward('categories_quiz')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
                                 <span className="text-8xl block mb-4 drop-shadow-md">🎮</span>
                                 <span className={`text-3xl font-black ${theme.accentText}`}>Play Game</span>
                             </button>
-                            <button onClick={() => setView('stories')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-yellow-100">
+                            <button onClick={() => goForward('stories')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-yellow-100">
                                 <span className="text-8xl block mb-4 drop-shadow-md">📖</span>
                                 <span className="text-3xl font-black text-yellow-500">Story Time</span>
                             </button>
@@ -1322,7 +1464,7 @@
                 );
             }
 
-            if (view === 'stickers') return <StickerBook stickers={stickers} setView={setView} />;
+            if (view === 'stickers') return <StickerBook stickers={stickers} onBack={backOrHome} />;
 
             // --- Category Picker ---
             if (view.startsWith('categories')) {
@@ -1342,11 +1484,11 @@
                             </div>
                         ) : (
                             <div className="grid grid-cols-2 gap-5">
-                                <button onClick={() => { setCategory('All'); setView(nextView); }} className={`col-span-2 ${theme.buttonClass} text-white p-8 rounded-3xl text-2xl font-black flex items-center justify-center gap-3`}>
+                                <button onClick={() => goForward(nextView, 'All')} className={`col-span-2 ${theme.buttonClass} text-white p-8 rounded-3xl text-2xl font-black flex items-center justify-center gap-3`}>
                                     <span className="text-4xl">🌟</span> Mix Everything!
                                 </button>
                                 {[...new Set(wordsWithAudio.map(w => w.category))].map(cat => (
-                                    <button key={cat} onClick={() => { setCategory(cat); setView(nextView); }} className={`bg-white p-6 rounded-3xl shadow-lg border-b-4 ${theme.cardBorder} hover:scale-105 transition-all`}>
+                                    <button key={cat} onClick={() => goForward(nextView, cat)} className={`bg-white p-6 rounded-3xl shadow-lg border-b-4 ${theme.cardBorder} hover:scale-105 transition-all`}>
                                         <div className="text-5xl mb-3">{wordsWithAudio.find(w => w.category === cat)?.icon}</div>
                                         <div className="font-black text-gray-600 text-lg">{cat}</div>
                                     </button>
@@ -1364,21 +1506,21 @@
                     <div className="text-7xl mb-4">📭</div>
                     <h2 className="text-2xl font-black text-gray-600 mb-2">No words yet!</h2>
                     <p className="text-gray-400 font-medium mb-6">Check for updates or add audio in the Parent Zone.</p>
-                    <button onClick={goHome} className="bg-white px-8 py-4 rounded-2xl font-bold text-gray-500 shadow-lg text-xl">Go Back</button>
+                    <button onClick={backOrHome} className="bg-white px-8 py-4 rounded-2xl font-bold text-gray-500 shadow-lg text-xl">Go Back</button>
                 </div>
             );
 
-            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={goHome} theme={theme} />;
-            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={goHome} theme={theme} />;
-            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={goHome} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
-            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={goHome} />;
+            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={backOrHome} theme={theme} />;
+            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={backOrHome} theme={theme} />;
+            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={backOrHome} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
+            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={backOrHome} registerShelfBack={(fn) => { shelfBackRef.current = fn; }} />;
             return null;
         };
 
-        const StickerBook = ({ stickers, setView }) => (
+        const StickerBook = ({ stickers, onBack }) => (
             <div className="p-4 max-w-4xl mx-auto animate-pop">
                 <div className="flex items-center gap-4 mb-6">
-                    <button onClick={goHome} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                    <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
                     <h2 className="text-3xl font-black text-gray-700">My Stickers! ⭐</h2>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
@@ -1701,10 +1843,15 @@
             const videoRef = useRef(null);
             const iframeRef = useRef(null);
             const containerRef = useRef(null);
+            const seekRef = useRef(null);
+            const hideTimer = useRef(null);
+            const scrubbing = useRef(false);
             const [blobUrl, setBlobUrl] = useState(null);
             const [isFullscreen, setIsFullscreen] = useState(false);
             const [isPlaying, setIsPlaying] = useState(false);
-            const [showOverlay, setShowOverlay] = useState(true);
+            const [showControls, setShowControls] = useState(true);
+            const [currentTime, setCurrentTime] = useState(0);
+            const [duration, setDuration] = useState(0);
 
             // Helpers
             const isYouTube = (url) => url && (url.includes('youtube.com') || url.includes('youtu.be'));
@@ -1782,6 +1929,7 @@
                     if (screen.orientation && screen.orientation.unlock) {
                         screen.orientation.unlock();
                     }
+                    if (hideTimer.current) clearTimeout(hideTimer.current);
                 };
             }, []);
 
@@ -1796,77 +1944,157 @@
                 onBack();
             };
 
-            const handleTapVideo = () => {
+            const fmtTime = (t) => {
+                if (!t || !isFinite(t)) return '0:00';
+                const m = Math.floor(t / 60);
+                const s = Math.floor(t % 60);
+                return m + ':' + (s < 10 ? '0' : '') + s;
+            };
+
+            // Controls auto-hide a moment after playback continues untouched
+            const armHideTimer = () => {
+                if (hideTimer.current) clearTimeout(hideTimer.current);
+                hideTimer.current = setTimeout(() => {
+                    if (videoRef.current && !videoRef.current.paused && !scrubbing.current) setShowControls(false);
+                }, 2500);
+            };
+
+            const togglePlay = () => {
                 const v = videoRef.current;
                 if (!v) return;
-                if (v.paused) {
-                    v.play().catch(() => {});
-                } else {
-                    v.pause();
-                }
-                setShowOverlay(true);
-                setTimeout(() => {
-                    if (videoRef.current && !videoRef.current.paused) setShowOverlay(false);
-                }, 1500);
+                if (v.paused) v.play().catch(() => {});
+                else v.pause();
+                setShowControls(true);
+                armHideTimer();
             };
+
+            const replay = (e) => {
+                e.stopPropagation();
+                const v = videoRef.current;
+                if (!v) return;
+                v.currentTime = 0;
+                v.play().catch(() => {});
+                setShowControls(true);
+                armHideTimer();
+            };
+
+            // Chunky seek bar - drag or tap anywhere on the track to jump
+            const seekToClientX = (clientX) => {
+                const bar = seekRef.current;
+                const v = videoRef.current;
+                if (!bar || !v || !v.duration) return;
+                const rect = bar.getBoundingClientRect();
+                let pct = (clientX - rect.left) / rect.width;
+                pct = Math.max(0, Math.min(1, pct));
+                v.currentTime = pct * v.duration;
+                setCurrentTime(v.currentTime);
+            };
+
+            const onSeekDown = (e) => {
+                e.stopPropagation();
+                scrubbing.current = true;
+                if (e.currentTarget.setPointerCapture) {
+                    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+                }
+                seekToClientX(e.clientX);
+                setShowControls(true);
+            };
+            const onSeekMove = (e) => { if (scrubbing.current) seekToClientX(e.clientX); };
+            const onSeekUp = () => { scrubbing.current = false; armHideTimer(); };
 
             const useIframe = video.url && !video.blob && isEmbedOnly(video.url);
             const playUrl = video.url ? getPlayUrl(video.url) : null;
             const directUrl = video.url && !video.blob && !useIframe ? playUrl : null;
             const srcUrl = blobUrl || (video.blob ? null : directUrl);
+            const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
             return (
                 <div
                     ref={containerRef}
                     style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', display: 'flex', flexDirection: 'column' }}
                 >
-                    {/* Top bar - shown when overlay visible or iframe (iframes handle their own controls) */}
-                    {(showOverlay || useIframe) && (
-                        <div style={{ background: 'rgba(0,0,0,0.75)', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 3 }}>
+                    {/* Top bar with a big friendly Done button */}
+                    {(showControls || useIframe) && (
+                        <div style={{ background: 'rgba(0,0,0,0.75)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, zIndex: 3 }}>
                             <button onClick={handleBack}
-                                style={{ background: 'rgba(255,255,255,0.18)', border: 'none', borderRadius: 22, padding: '8px 18px', color: 'white', fontSize: 15, fontWeight: 800, fontFamily: 'sans-serif', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                                <span>✓</span><span>Done</span>
+                                style={{ background: 'linear-gradient(to bottom, #4ade80, #16a34a)', border: 'none', borderRadius: 26, padding: '12px 22px', color: 'white', fontSize: 17, fontWeight: 900, fontFamily: 'sans-serif', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, boxShadow: '0 4px 0 #15803d, 0 6px 12px rgba(0,0,0,0.4)' }}>
+                                <span style={{ fontSize: 18 }}>{'\u2713'}</span><span>Done</span>
                             </button>
-                            <span style={{ color: 'rgba(255,255,255,0.85)', fontFamily: 'sans-serif', fontSize: 14, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                            <span style={{ color: 'rgba(255,255,255,0.9)', fontFamily: 'sans-serif', fontSize: 15, fontWeight: 800, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>
                                 {video.title}
                             </span>
-                            <span style={{ fontSize: 18, flexShrink: 0, opacity: 0.7 }}>🎬</span>
+                            <span style={{ fontSize: 22, flexShrink: 0 }}>{'\uD83C\uDFAC'}</span>
                         </div>
                     )}
 
                     {/* Video area */}
                     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', overflow: 'hidden', position: 'relative' }}>
 
-                        {/* Custom video player - blob or direct stream */}
+                        {/* Custom kid-friendly player - blob or direct stream */}
                         {srcUrl && (
-                            <div onClick={handleTapVideo} style={{ width: '100%', height: '100%', position: 'relative', cursor: 'pointer' }}>
+                            <div onClick={togglePlay} style={{ width: '100%', height: '100%', position: 'relative', cursor: 'pointer' }}>
                                 <video
                                     ref={videoRef}
                                     src={srcUrl}
                                     autoPlay
                                     playsInline
                                     loop
-                                    onPlay={() => { setIsPlaying(true); setTimeout(() => setShowOverlay(false), 1500); }}
-                                    onPause={() => { setIsPlaying(false); setShowOverlay(true); }}
+                                    onPlay={() => { setIsPlaying(true); armHideTimer(); }}
+                                    onPause={() => { setIsPlaying(false); setShowControls(true); }}
+                                    onTimeUpdate={() => { if (videoRef.current && !scrubbing.current) setCurrentTime(videoRef.current.currentTime); }}
+                                    onLoadedMetadata={() => { if (videoRef.current) setDuration(videoRef.current.duration || 0); }}
+                                    onDurationChange={() => { if (videoRef.current) setDuration(videoRef.current.duration || 0); }}
                                     style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
                                 />
-                                {showOverlay && (
+
+                                {/* Big bouncy centre play button - shows whenever paused */}
+                                {!isPlaying && (
                                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-                                        <div style={{
-                                            width: 96, height: 96, borderRadius: '50%',
-                                            background: 'rgba(0,0,0,0.55)',
+                                        <div className="animate-pulse-gentle" style={{
+                                            width: 110, height: 110, borderRadius: '50%',
+                                            background: 'linear-gradient(to bottom, #fb7185, #e11d48)',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            color: 'white', fontSize: 44,
-                                            boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+                                            color: 'white', fontSize: 48,
+                                            boxShadow: '0 8px 0 #9f1239, 0 12px 30px rgba(0,0,0,0.5)',
+                                            border: '5px solid rgba(255,255,255,0.9)'
                                         }}>
-                                            {isPlaying ? '\u23F8' : '\u25B6'}
+                                            <span style={{ marginLeft: 6 }}>{'\u25B6'}</span>
                                         </div>
+                                    </div>
+                                )}
+
+                                {/* Chunky YouTube-Kids-style control bar */}
+                                {showControls && (
+                                    <div onClick={(e) => e.stopPropagation()}
+                                        style={{ position: 'absolute', left: 12, right: 12, bottom: 14, background: 'rgba(20,20,30,0.78)', backdropFilter: 'blur(8px)', borderRadius: 28, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.45)', zIndex: 4 }}>
+                                        <button onClick={replay}
+                                            style={{ width: 52, height: 52, borderRadius: '50%', border: 'none', background: 'linear-gradient(to bottom, #fbbf24, #f59e0b)', color: 'white', fontSize: 24, fontWeight: 900, cursor: 'pointer', flexShrink: 0, boxShadow: '0 4px 0 #b45309', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            {'\u21BA'}
+                                        </button>
+                                        <button onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+                                            style={{ width: 64, height: 64, borderRadius: '50%', border: 'none', background: 'linear-gradient(to bottom, #fb7185, #e11d48)', color: 'white', fontSize: 28, cursor: 'pointer', flexShrink: 0, boxShadow: '0 4px 0 #9f1239', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            <span style={{ marginLeft: isPlaying ? 0 : 4 }}>{isPlaying ? '\u23F8' : '\u25B6'}</span>
+                                        </button>
+                                        <div ref={seekRef}
+                                            onPointerDown={onSeekDown}
+                                            onPointerMove={onSeekMove}
+                                            onPointerUp={onSeekUp}
+                                            onPointerCancel={onSeekUp}
+                                            style={{ flex: 1, height: 44, display: 'flex', alignItems: 'center', cursor: 'pointer', touchAction: 'none', position: 'relative' }}>
+                                            <div style={{ width: '100%', height: 16, borderRadius: 10, background: 'rgba(255,255,255,0.25)', position: 'relative' }}>
+                                                <div style={{ width: progressPct + '%', height: '100%', borderRadius: 10, background: 'linear-gradient(to right, #f59e0b, #ef4444)' }} />
+                                                <div style={{ position: 'absolute', top: '50%', left: progressPct + '%', transform: 'translate(-50%, -50%)', width: 30, height: 30, borderRadius: '50%', background: 'white', boxShadow: '0 3px 8px rgba(0,0,0,0.45)', border: '4px solid #ef4444' }} />
+                                            </div>
+                                        </div>
+                                        <span style={{ color: 'rgba(255,255,255,0.85)', fontFamily: 'sans-serif', fontSize: 13, fontWeight: 800, flexShrink: 0, minWidth: 76, textAlign: 'right' }}>
+                                            {fmtTime(currentTime)} / {fmtTime(duration)}
+                                        </span>
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        {/* YouTube/Drive iframe */}
+                        {/* YouTube/Drive iframe - native controls are unavoidable here */}
                         {useIframe && (
                             <iframe
                                 ref={iframeRef}
@@ -1882,7 +2110,7 @@
                         {/* No source */}
                         {!srcUrl && !useIframe && (
                             <div style={{ color: 'rgba(255,255,255,0.5)', fontFamily: 'sans-serif', textAlign: 'center', padding: 24 }}>
-                                <div style={{ fontSize: 48, marginBottom: 12 }}>🎬</div>
+                                <div style={{ fontSize: 48, marginBottom: 12 }}>{'\uD83C\uDFAC'}</div>
                                 <p>No video source available.</p>
                             </div>
                         )}
@@ -1905,18 +2133,38 @@
         };
 
         // ── STORY SHELF (Gemini HTML stories + Videos) ────────────────────
-        const StoryShelf = ({ lang, words, playAudio, onBack }) => {
+        const StoryShelf = ({ lang, words, playAudio, onBack, registerShelfBack }) => {
             const [htmlStories, setHtmlStories] = useState([]);
             const [videos, setVideos] = useState([]);
             const [loading, setLoading] = useState(true);
             const [activeHtml, setActiveHtml] = useState(null);
             const [activeVideo, setActiveVideo] = useState(null);
+            const activeRef = useRef({ html: null, video: null });
+            useEffect(() => { activeRef.current = { html: activeHtml, video: activeVideo }; });
+
+            // Device back button closes an open story/video before leaving the shelf
+            useEffect(() => {
+                if (registerShelfBack) {
+                    registerShelfBack(() => {
+                        if (activeRef.current.html) { setActiveHtml(null); refresh(); return true; }
+                        if (activeRef.current.video) { setActiveVideo(null); refresh(); return true; }
+                        return false;
+                    });
+                }
+                return () => { if (registerShelfBack) registerShelfBack(null); };
+            }, []);
 
             const refresh = () => {
                 setLoading(true);
                 Promise.all([dbLoadStories(), dbLoadVideos()]).then(async ([html, localVids]) => {
+                    // Merge Firestore story links so stories appear on all devices
+                    let stories = html;
+                    try {
+                        const merge = await mergeRemoteStories(html);
+                        if (merge.changed) stories = await dbLoadStories();
+                    } catch (e) { /* offline or rules not yet updated - local only */ }
                     // Filter stories by lang (show items tagged for this lang, or untagged legacy items)
-                    setHtmlStories(html.filter(s => !s.lang || s.lang === lang));
+                    setHtmlStories(stories.filter(s => !s.lang || s.lang === lang));
                     // Merge Firestore video links so they appear on all devices
                     try {
                         const remoteLinks = await fsLoadVideoLinks();
@@ -2087,6 +2335,15 @@
             const [status, setStatus] = useState('');
             const [isError, setIsError] = useState(false);
             const [busy, setBusy] = useState(false);
+            const [remoteStoryIds, setRemoteStoryIds] = useState(new Set());
+            const [editingStory, setEditingStory] = useState(null);
+            const [showPromptBuilder, setShowPromptBuilder] = useState(false);
+            const [promptLang, setPromptLang] = useState('gungbe');
+            const [promptIdea, setPromptIdea] = useState('');
+            const [promptChild, setPromptChild] = useState('');
+            const [promptPages, setPromptPages] = useState(6);
+            const [promptWords, setPromptWords] = useState('');
+            const [generatedPrompt, setGeneratedPrompt] = useState('');
             const [videoTitle, setVideoTitle] = useState('');
             const [videoUrl, setVideoUrl] = useState('');
             const [showUrlForm, setShowUrlForm] = useState(false);
@@ -2114,7 +2371,13 @@
             };
 
             const refresh = async () => {
-                const [html, localVids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
+                let [html, localVids] = await Promise.all([dbLoadStories(), dbLoadVideos()]);
+                // Pull stories imported on other devices and record sync status
+                try {
+                    const merge = await mergeRemoteStories();
+                    if (merge.changed) html = await dbLoadStories();
+                    setRemoteStoryIds(new Set(merge.links.map(l => l.id)));
+                } catch (e) { /* offline or rules not yet updated - local only */ }
                 setHtmlStories(html);
                 // Merge local videos with Firestore links (Firestore links have no blob)
                 try {
@@ -2158,7 +2421,15 @@
                         const story = { id: 'story_' + Date.now(), title, pageCount: pages.length, author: 'Seyon Hunga', html: htmlString, lang };
                         await dbSaveStory(story);
                         await refresh();
-                        showMsg('Imported "' + story.title + '" (' + story.pageCount + ' pages) for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!');
+                        let syncNote = '';
+                        try {
+                            await fsSaveStoryLink(story);
+                            syncNote = ' Synced to all devices.';
+                            await refresh();
+                        } catch (se) {
+                            syncNote = ' (Cloud sync failed: ' + se.message + ' - story saved on this device only.)';
+                        }
+                        showMsg('Imported "' + story.title + '" (' + story.pageCount + ' pages) for ' + (lang === 'gungbe' ? 'Gungbe' : 'Yoruba') + '!' + syncNote);
                     } catch (err) {
                         showMsg('Import failed: ' + err.message, true);
                     }
@@ -2230,7 +2501,7 @@
                         showMsg('Uploading... ' + pct + '%');
                     });
                     await saveUrlVideo({ title: firebaseTitle, url: downloadUrl, downloadUrl: downloadUrl, lang, source: 'Firebase' });
-                    showMsg(' + firebaseTitle.trim() +  uploaded and synced! Save offline works on any device.');
+                    showMsg('\"' + firebaseTitle.trim() + '\" uploaded and synced! Save offline works on any device.');
                     setFirebaseTitle('');
                     setShowFirebaseForm(false);
                     if (firebaseFileRef.current) firebaseFileRef.current.value = '';
@@ -2328,6 +2599,10 @@
 
             const handleDeleteHtml = async (id) => {
                 await dbDeleteStory(id);
+                try {
+                    const chunkCount = await fsGetStoryChunkCount(id);
+                    if (chunkCount > 0) await fsDeleteStoryLink(id, chunkCount);
+                } catch (e) { /* remote delete failed - local copy is gone */ }
                 await refresh();
                 showMsg('Story removed.');
             };
@@ -2337,6 +2612,76 @@
                 if (hasUrl) await fsDeleteVideoLink(id).catch(() => {});
                 await refresh();
                 showMsg('Video removed.');
+            };
+
+            // Save title and language edits for a story (local + cloud metadata)
+            const saveStoryEdit = async () => {
+                if (!editingStory) return;
+                if (!editingStory.title.trim()) { showMsg('Title cannot be empty.', true); return; }
+                const full = htmlStories.find(s => s.id === editingStory.id);
+                if (!full) { setEditingStory(null); return; }
+                const updated = { ...full, title: editingStory.title.trim(), lang: editingStory.lang };
+                await dbSaveStory(updated);
+                try { await fsUpdateStoryMeta(updated); } catch (e) { /* metadata sync failed - saved locally */ }
+                setEditingStory(null);
+                await refresh();
+                showMsg('Story updated.');
+            };
+
+            // Manually push a local-only story to all devices
+            const syncStoryToCloud = async (story) => {
+                setBusy(true);
+                showMsg('Syncing "' + story.title + '" to all devices...');
+                try {
+                    await fsSaveStoryLink(story);
+                    await refresh();
+                    showMsg('"' + story.title + '" is now available on all devices!');
+                } catch (e) {
+                    showMsg('Sync failed: ' + e.message + '. Check Firestore rules allow story_links and story_chunks.', true);
+                }
+                setBusy(false);
+            };
+
+            // Build a complete AI story-generation prompt from the form
+            const buildStoryPrompt = () => {
+                if (!promptIdea.trim()) { showMsg('Describe the story idea first.', true); return; }
+                const langLabel = promptLang === 'gungbe' ? 'Gungbe' : 'Yoruba';
+                const langName = promptLang === 'gungbe'
+                    ? 'Gungbe (also called Gun, a Gbe language spoken in Benin)'
+                    : 'Yoruba (as spoken in Nigeria, with correct diacritics)';
+                const childLine = promptChild.trim() ? 'The main character is a young child named ' + promptChild.trim() + '. ' : '';
+                const wordsLine = promptWords.trim() ? 'Naturally weave in these ' + langLabel + ' vocabulary words, repeating each at least twice: ' + promptWords.trim() + '. ' : '';
+                const lines = [
+                    'You are an author of storybooks for children and a front-end developer. Create an interactive bilingual storybook web page for a child aged 2 to 5 who is learning ' + langName + ' alongside English.',
+                    '',
+                    'STORY BRIEF: ' + promptIdea.trim(),
+                    '',
+                    childLine + wordsLine + 'Keep sentences short, warm, rhythmic and repetitive - perfect for reading aloud. The story must have exactly ' + promptPages + ' story pages plus a final celebration page.',
+                    '',
+                    'OUTPUT FORMAT (follow every rule exactly):',
+                    '1. Return ONE single self-contained HTML file. All CSS and JavaScript must be inline. No external resources, fonts, images or libraries of any kind.',
+                    '2. The <title> must be exactly: Little Linguist | {Story Title}',
+                    '3. Each story page must be a <div class="page-card">. Show only one page at a time, with big friendly Next and Back buttons to move between pages.',
+                    '4. All artwork must be made of large emoji scenes only. Do not use <img> tags or any external pictures.',
+                    '5. Every page shows the ' + langLabel + ' text in large bold type, with the English translation underneath in smaller italic type.',
+                    '6. Add a speaker button on each page that reads the English text aloud using window.speechSynthesis, wrapped in try/catch so devices without speech support do not break.',
+                    '7. The final page must be a celebration page with confetti and star emoji and a cheerful well-done message.',
+                    '8. Use a bright, rounded, kid-friendly design with very large tap targets suitable for small fingers on a phone.',
+                    '9. Keep the entire file under 1MB.',
+                    '',
+                    'Respond with ONLY the complete HTML file and nothing else.'
+                ];
+                setGeneratedPrompt(lines.join('\n'));
+            };
+
+            const copyPromptToClipboard = async () => {
+                if (!generatedPrompt) return;
+                try {
+                    await navigator.clipboard.writeText(generatedPrompt);
+                    showMsg('Prompt copied! Paste it into Gemini, Claude or ChatGPT, then import the HTML file it returns.');
+                } catch (e) {
+                    showMsg('Could not copy automatically - long-press the text box below to copy it manually.', true);
+                }
             };
 
             const [cachingId, setCachingId] = useState(null);
@@ -2414,21 +2759,104 @@
                             style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
                             <Icon name="Upload" size={16} /> Import Gemini Story (.html)
                         </button>
+                        <button onClick={() => setShowPromptBuilder(!showPromptBuilder)} disabled={busy}
+                            className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60 mt-2"
+                            style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #f97316)' }}>
+                            <span>{'\u2728'}</span> Build Story Prompt
+                        </button>
+                        {showPromptBuilder && (
+                            <div className="bg-white border border-gray-200 rounded-xl p-4 mt-3 space-y-2">
+                                <p className="text-sm font-black text-gray-700" style={{ fontFamily: 'sans-serif' }}>Describe the story you want</p>
+                                <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>This builds a ready-made prompt for Gemini, Claude or ChatGPT. Paste the HTML file it returns back here using Import.</p>
+                                <div className="flex gap-2">
+                                    {[['gungbe', 'Gungbe'], ['yoruba', 'Yoruba']].map(opt => (
+                                        <button key={opt[0]} onClick={() => setPromptLang(opt[0])}
+                                            className="flex-1 py-2 rounded-lg font-bold text-xs border"
+                                            style={{ background: promptLang === opt[0] ? '#6366f1' : '#fff', color: promptLang === opt[0] ? '#fff' : '#6b7280', borderColor: promptLang === opt[0] ? '#6366f1' : '#e5e7eb' }}>
+                                            {opt[1]}
+                                        </button>
+                                    ))}
+                                </div>
+                                <textarea value={promptIdea} onChange={(e) => setPromptIdea(e.target.value)}
+                                    placeholder="e.g. A little girl helps her grandma cook rice for a big family party"
+                                    rows={3}
+                                    className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                                <input value={promptChild} onChange={(e) => setPromptChild(e.target.value)}
+                                    placeholder="Child's name (optional)"
+                                    className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                                <div className="flex gap-2">
+                                    {[4, 6, 8, 10].map(n => (
+                                        <button key={n} onClick={() => setPromptPages(n)}
+                                            className="flex-1 py-2 rounded-lg font-bold text-xs border"
+                                            style={{ background: promptPages === n ? '#6366f1' : '#fff', color: promptPages === n ? '#fff' : '#6b7280', borderColor: promptPages === n ? '#6366f1' : '#e5e7eb' }}>
+                                            {n} pages
+                                        </button>
+                                    ))}
+                                </div>
+                                <input value={promptWords} onChange={(e) => setPromptWords(e.target.value)}
+                                    placeholder="Vocabulary words to include (optional, comma separated)"
+                                    className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                                <button onClick={buildStoryPrompt}
+                                    className="w-full text-white py-2 rounded-lg font-bold text-sm active:scale-95 transition-all"
+                                    style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+                                    Generate Prompt
+                                </button>
+                                {generatedPrompt && (
+                                    <div className="space-y-2">
+                                        <textarea readOnly value={generatedPrompt} rows={8}
+                                            className="w-full p-2 rounded-lg border border-gray-200 text-xs" style={{ fontFamily: 'monospace' }} />
+                                        <button onClick={copyPromptToClipboard}
+                                            className="w-full text-white py-2 rounded-lg font-bold text-sm active:scale-95 transition-all"
+                                            style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #10b981, #059669)' }}>
+                                            <span>{'\uD83D\uDCCB'}</span> Copy Prompt
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         {htmlStories.length > 0 && (
                             <div className="space-y-2 mt-3">
                                 {htmlStories.map(s => (
-                                    <div key={s.id} className="bg-white rounded-xl p-3 border border-gray-100 flex items-center gap-3 shadow-sm">
-                                        <span style={{ fontSize: 22 }}>📖</span>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
-                                            <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                {s.pageCount || '?'} pages{s.author ? ' - ' + s.author : ''}{s.lang ? ' | ' + (s.lang === 'gungbe' ? 'Gungbe' : 'Yoruba') : ' | All'}
-                                            </p>
+                                    <div key={s.id} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
+                                        <div className="flex items-center gap-3">
+                                            <span style={{ fontSize: 22 }}>📖</span>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
+                                                <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                                    {s.pageCount || '?'} pages{s.lang ? ' | ' + (s.lang === 'gungbe' ? 'Gungbe' : 'Yoruba') : ' | All'}{remoteStoryIds.has(s.id) ? ' | \u2601\uFE0F Synced' : ' | This device only'}
+                                                </p>
+                                            </div>
+                                            {!remoteStoryIds.has(s.id) && (
+                                                <button onClick={() => syncStoryToCloud(s)} disabled={busy} title="Sync to all devices"
+                                                    className="bg-blue-50 p-2 rounded-lg shrink-0" style={{ fontSize: 14 }}>{'\u2601\uFE0F'}</button>
+                                            )}
+                                            <button onClick={() => setEditingStory(editingStory && editingStory.id === s.id ? null : { id: s.id, title: s.title, lang: s.lang || null })}
+                                                className="bg-gray-100 p-2 rounded-lg shrink-0" style={{ fontSize: 14 }}>{'\u270F\uFE0F'}</button>
+                                            <button onClick={() => handleDeleteHtml(s.id)}
+                                                className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors shrink-0">
+                                                <Icon name="Trash2" size={14} />
+                                            </button>
                                         </div>
-                                        <button onClick={() => handleDeleteHtml(s.id)}
-                                            className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0">
-                                            <Icon name="Trash2" size={14} />
-                                        </button>
+                                        {editingStory && editingStory.id === s.id && (
+                                            <div className="mt-3 space-y-2">
+                                                <input value={editingStory.title}
+                                                    onChange={(e) => setEditingStory({ ...editingStory, title: e.target.value })}
+                                                    className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                                                <div className="flex gap-2">
+                                                    {[['gungbe', 'Gungbe'], ['yoruba', 'Yoruba'], [null, 'Both']].map(opt => (
+                                                        <button key={String(opt[0])} onClick={() => setEditingStory({ ...editingStory, lang: opt[0] })}
+                                                            className="flex-1 py-2 rounded-lg font-bold text-xs border"
+                                                            style={{ background: editingStory.lang === opt[0] ? '#6366f1' : '#fff', color: editingStory.lang === opt[0] ? '#fff' : '#6b7280', borderColor: editingStory.lang === opt[0] ? '#6366f1' : '#e5e7eb' }}>
+                                                            {opt[1]}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button onClick={saveStoryEdit} className="flex-1 py-2 rounded-lg font-bold text-xs text-white" style={{ background: '#10b981' }}>Save</button>
+                                                    <button onClick={() => setEditingStory(null)} className="flex-1 py-2 rounded-lg font-bold text-xs text-gray-500 bg-gray-100">Cancel</button>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
