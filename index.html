@@ -107,13 +107,28 @@
             50% { transform: scale(1.04); }
         }
         .animate-pulse-gentle { animation: pulse-gentle 2.5s ease-in-out infinite; }
+        @keyframes llFlipNext {
+            0% { transform: rotateY(0deg); }
+            100% { transform: rotateY(-170deg); }
+        }
+        @keyframes llFlipPrev {
+            0% { transform: rotateY(-170deg); }
+            100% { transform: rotateY(0deg); }
+        }
+        .ll-flip-next { animation: llFlipNext 0.65s ease-in-out forwards; }
+        .ll-flip-prev { animation: llFlipPrev 0.65s ease-in-out forwards; }
+        @keyframes llKenburns {
+            0% { transform: scale(1) translate(0, 0); }
+            100% { transform: scale(1.12) translate(1%, -1%); }
+        }
+        .ll-kenburns { animation: llKenburns 12s ease-in-out infinite alternate; }
     </style>
 </head>
 <body class="antialiased selection:bg-yellow-200 selection:text-yellow-900 overflow-y-auto">
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
         // --- FIREBASE SETUP ---
         const firebaseConfig = {
@@ -876,7 +891,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.1.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.3.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2132,6 +2147,309 @@
             return true;
         };
 
+        // ── STORY STUDIO ──────────────────────────────────────────────────
+        // A "studio" story is stored in the same `stories` IndexedDB store and
+        // synced via the same Firestore chunking as HTML stories. We pack the
+        // page data (text + woven-in words + base64 images) into the `html`
+        // field as JSON behind a sentinel, so it inherits cross-device sync
+        // with no new Firebase code. The shelf detects the sentinel and renders
+        // it natively in a flip-book instead of a sandboxed iframe.
+        const STUDIO_SENTINEL = '<!--LL_STUDIO_V1-->';
+
+        const isStudioStory = (story) => !!story && typeof story.html === 'string' && story.html.indexOf(STUDIO_SENTINEL) === 0;
+
+        // Build the stored payload from a studio story object {title, lang, pages, mode}
+        const packStudioStory = (data) => {
+            const payload = { title: data.title, lang: data.lang || null, mode: data.mode || 'woven', pages: data.pages || [] };
+            return STUDIO_SENTINEL + JSON.stringify(payload);
+        };
+
+        // First page image of a studio story, used as the shelf cover
+        const studioCover = (story) => {
+            if (!isStudioStory(story)) return null;
+            try {
+                const data = unpackStudioStory(story);
+                const withImg = data.pages.find(p => p.image);
+                return withImg ? withImg.image : null;
+            } catch (e) { return null; }
+        };
+
+        const unpackStudioStory = (story) => {
+            try {
+                const json = story.html.slice(STUDIO_SENTINEL.length);
+                const data = JSON.parse(json);
+                return { id: story.id, title: story.title, lang: story.lang || data.lang || null, mode: data.mode || 'woven', pages: Array.isArray(data.pages) ? data.pages : [] };
+            } catch (e) {
+                return { id: story.id, title: story.title, lang: story.lang || null, mode: 'woven', pages: [] };
+            }
+        };
+
+        // Render a page's text with target-language words tappable to hear them.
+        // A word token wrapped in *asterisks* is treated as a target-language word.
+        const StudioText = ({ text, mode, onSpeak }) => {
+            if (!text) return null;
+            const parts = text.split(/(\*[^*]+\*)/g);
+            return (
+                <span>
+                    {parts.map((part, i) => {
+                        if (part.length > 2 && part[0] === '*' && part[part.length - 1] === '*') {
+                            const word = part.slice(1, -1);
+                            return (
+                                <button key={i} onClick={() => onSpeak(word)}
+                                    className="font-black text-purple-700 underline"
+                                    style={{ background: 'rgba(250,204,21,0.55)', borderRadius: 6, padding: '0 4px', display: 'inline-block' }}>
+                                    {word}
+                                </button>
+                            );
+                        }
+                        return <span key={i}>{part}</span>;
+                    })}
+                </span>
+            );
+        };
+
+        // ── STUDIO READER: native flip-book ──
+        const StudioReader = ({ story, onBack }) => {
+            const data = useMemo(() => unpackStudioStory(story), [story.id]);
+            const pages = data.pages;
+            const [index, setIndex] = useState(0);
+            const [flipping, setFlipping] = useState(null); // 'next' | 'prev' | null
+
+            const speak = (txt) => {
+                try {
+                    if (!('speechSynthesis' in window)) return;
+                    window.speechSynthesis.cancel();
+                    const u = new SpeechSynthesisUtterance(txt);
+                    u.rate = 0.85;
+                    window.speechSynthesis.speak(u);
+                } catch (e) { /* speech unsupported */ }
+            };
+
+            const go = (dir) => {
+                if (flipping) return;
+                const target = dir === 'next' ? index + 1 : index - 1;
+                if (target < 0 || target >= pages.length) return;
+                setFlipping(dir);
+                setTimeout(() => { setIndex(target); setFlipping(null); }, 650);
+            };
+
+            useEffect(() => () => { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); }, []);
+
+            if (!pages.length) {
+                return (
+                    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#0f0f1a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+                        <p style={{ fontFamily: 'sans-serif', opacity: .7, marginBottom: 16 }}>This story has no pages yet.</p>
+                        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 12, padding: '10px 20px', color: 'white', fontWeight: 700 }}>Back</button>
+                    </div>
+                );
+            }
+
+            const page = pages[index];
+            const isLast = index === pages.length - 1;
+            const flipClass = flipping === 'next' ? 'll-flip-next' : flipping === 'prev' ? 'll-flip-prev' : '';
+
+            return (
+                <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'linear-gradient(160deg,#1e1b4b,#0f0f1a)', display: 'flex', flexDirection: 'column' }}>
+                    {/* Top bar */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', flexShrink: 0 }}>
+                        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: '50%', width: 40, height: 40, color: 'white', fontSize: 18 }}>🏠</button>
+                        <div style={{ flex: 1, textAlign: 'center', color: 'rgba(255,255,255,0.65)', fontSize: 13, fontFamily: 'sans-serif', fontWeight: 700 }}>{story.title}</div>
+                        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'sans-serif', minWidth: 44, textAlign: 'right' }}>{index + 1}/{pages.length}</div>
+                    </div>
+
+                    {/* Book stage */}
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', perspective: 1600, padding: '0 12px 12px' }}>
+                        <div className={flipClass} style={{ width: '100%', maxWidth: 460, transformStyle: 'preserve-3d', transformOrigin: 'left center' }}>
+                            <div style={{ background: '#fff', borderRadius: 24, overflow: 'hidden', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }}>
+                                {/* Illustration */}
+                                <div style={{ width: '100%', aspectRatio: '1 / 1', background: page.image ? '#000' : 'linear-gradient(135deg,#a78bfa,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                                    {page.image ? (
+                                        <img src={page.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} className="ll-kenburns" />
+                                    ) : (
+                                        <span style={{ fontSize: 90 }}>📖</span>
+                                    )}
+                                </div>
+                                {/* Caption */}
+                                <div style={{ padding: '18px 20px 22px' }}>
+                                    <p style={{ fontFamily: 'sans-serif', fontSize: 21, lineHeight: 1.4, color: '#1f2937', fontWeight: 700, margin: 0 }}>
+                                        <StudioText text={page.text} mode={data.mode} onSpeak={speak} />
+                                    </p>
+                                    {page.translation ? (
+                                        <p style={{ fontFamily: 'sans-serif', fontStyle: 'italic', fontSize: 15, color: '#6b7280', marginTop: 8 }}>{page.translation}</p>
+                                    ) : null}
+                                    <button onClick={() => speak(page.speak || page.text.replace(/\*/g, ''))}
+                                        style={{ marginTop: 12, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', border: 'none', borderRadius: 14, padding: '10px 18px', fontWeight: 800, fontFamily: 'sans-serif', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                        <span style={{ fontSize: 18 }}>🔊</span> Read to me
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Nav controls */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '0 18px 22px', flexShrink: 0 }}>
+                        <button onClick={() => go('prev')} disabled={index === 0}
+                            style={{ background: index === 0 ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 18, padding: '14px 22px', color: '#fff', fontSize: 16, fontWeight: 800, fontFamily: 'sans-serif', opacity: index === 0 ? 0.4 : 1 }}>
+                            ‹ Back
+                        </button>
+                        {isLast ? (
+                            <button onClick={onBack}
+                                style={{ background: 'linear-gradient(135deg,#10b981,#059669)', border: 'none', borderRadius: 18, padding: '14px 28px', color: '#fff', fontSize: 16, fontWeight: 900, fontFamily: 'sans-serif' }}>
+                                ✓ Done
+                            </button>
+                        ) : (
+                            <button onClick={() => go('next')}
+                                style={{ background: 'linear-gradient(135deg,#f59e0b,#f97316)', border: 'none', borderRadius: 18, padding: '14px 28px', color: '#fff', fontSize: 16, fontWeight: 900, fontFamily: 'sans-serif' }}>
+                                Next ›
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // ── STUDIO BUILDER: create/edit a studio story page by page ──
+        const StudioBuilder = ({ initial, onSave, onCancel, showMsg }) => {
+            const [title, setTitle] = useState(initial ? initial.title : '');
+            const [lang, setLang] = useState(initial ? (initial.lang || 'gungbe') : 'gungbe');
+            const [mode, setMode] = useState(initial ? (initial.mode || 'woven') : 'woven');
+            const [pages, setPages] = useState(initial && initial.pages.length ? initial.pages : [{ text: '', translation: '', image: '' }]);
+            const [busy, setBusy] = useState(false);
+            const fileRefs = useRef({});
+
+            const updatePage = (i, field, value) => {
+                setPages(pages.map((p, idx) => idx === i ? { ...p, [field]: value } : p));
+            };
+
+            const addPage = () => setPages([...pages, { text: '', translation: '', image: '' }]);
+            const removePage = (i) => { if (pages.length > 1) setPages(pages.filter((_, idx) => idx !== i)); };
+            const movePage = (i, dir) => {
+                const j = dir === 'up' ? i - 1 : i + 1;
+                if (j < 0 || j >= pages.length) return;
+                const copy = pages.slice();
+                const tmp = copy[i]; copy[i] = copy[j]; copy[j] = tmp;
+                setPages(copy);
+            };
+
+            // Downscale an image file to a base64 JPEG to keep stories small enough to sync
+            const handleImageFile = (i, file) => {
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const maxDim = 900;
+                        let { width, height } = img;
+                        if (width > height && width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
+                        else if (height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width; canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+                        updatePage(i, 'image', dataUrl);
+                    };
+                    img.onerror = () => showMsg('That image could not be read.', true);
+                    img.src = reader.result;
+                };
+                reader.onerror = () => showMsg('That image could not be read.', true);
+                reader.readAsDataURL(file);
+            };
+
+            const totalBytes = useMemo(() => pages.reduce((sum, p) => sum + (p.image ? p.image.length : 0), 0), [pages]);
+            const tooBig = totalBytes > 4200000;
+
+            const save = () => {
+                if (!title.trim()) { showMsg('Give the story a title first.', true); return; }
+                if (tooBig) { showMsg('Story images are too large to sync. Use fewer or smaller images.', true); return; }
+                setBusy(true);
+                onSave({ id: initial ? initial.id : null, title: title.trim(), lang, mode, pages });
+            };
+
+            return (
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <p className="text-sm font-black text-gray-700" style={{ fontFamily: 'sans-serif' }}>{initial ? 'Edit Story' : 'New Story'}</p>
+                        <button onClick={onCancel} className="text-gray-400 text-sm font-bold">Close</button>
+                    </div>
+
+                    <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Story title"
+                        className="w-full p-3 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+
+                    <div className="flex gap-2">
+                        {[['gungbe', 'Gungbe'], ['yoruba', 'Yoruba'], [null, 'Both']].map(opt => (
+                            <button key={String(opt[0])} onClick={() => setLang(opt[0])}
+                                className="flex-1 py-2 rounded-lg font-bold text-xs border"
+                                style={{ background: lang === opt[0] ? '#6366f1' : '#fff', color: lang === opt[0] ? '#fff' : '#6b7280', borderColor: lang === opt[0] ? '#6366f1' : '#e5e7eb' }}>
+                                {opt[1]}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="bg-blue-50 rounded-lg p-3">
+                        <p className="text-xs text-gray-500" style={{ fontFamily: 'sans-serif' }}>
+                            Wrap target-language words in *asterisks* to make them tappable and highlighted, e.g. She opened the *ìwé*.
+                        </p>
+                    </div>
+
+                    {pages.map((p, i) => (
+                        <div key={i} className="bg-white border border-gray-200 rounded-xl p-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                                <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Page {i + 1}</span>
+                                <div className="flex gap-1">
+                                    <button onClick={() => movePage(i, 'up')} disabled={i === 0} className="bg-gray-100 px-2 py-1 rounded text-xs" style={{ opacity: i === 0 ? 0.4 : 1 }}>↑</button>
+                                    <button onClick={() => movePage(i, 'down')} disabled={i === pages.length - 1} className="bg-gray-100 px-2 py-1 rounded text-xs" style={{ opacity: i === pages.length - 1 ? 0.4 : 1 }}>↓</button>
+                                    <button onClick={() => removePage(i)} disabled={pages.length === 1} className="bg-red-50 text-red-400 px-2 py-1 rounded text-xs" style={{ opacity: pages.length === 1 ? 0.4 : 1 }}>✕</button>
+                                </div>
+                            </div>
+
+                            <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center" style={{ position: 'relative' }}>
+                                {p.image ? (
+                                    <img src={p.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                ) : (
+                                    <span className="text-gray-400 text-sm" style={{ fontFamily: 'sans-serif' }}>No image yet</span>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <input ref={(el) => { fileRefs.current[i] = el; }} type="file" accept="image/*" style={{ display: 'none' }}
+                                    onChange={(e) => { handleImageFile(i, e.target.files[0]); e.target.value = ''; }} />
+                                <button onClick={() => fileRefs.current[i] && fileRefs.current[i].click()}
+                                    className="flex-1 bg-gray-100 py-2 rounded-lg text-xs font-bold text-gray-600">
+                                    {p.image ? 'Replace image' : 'Add image'}
+                                </button>
+                                <input value={p.image && p.image.indexOf('data:') !== 0 ? p.image : ''} onChange={(e) => updatePage(i, 'image', e.target.value)}
+                                    placeholder="or paste image link"
+                                    className="flex-1 p-2 rounded-lg border border-gray-200 text-xs" style={{ fontFamily: 'sans-serif' }} />
+                            </div>
+
+                            <textarea value={p.text} onChange={(e) => updatePage(i, 'text', e.target.value)}
+                                placeholder="Page text. Wrap target words in *asterisks*."
+                                rows={3} className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                            {mode === 'dual' && (
+                                <input value={p.translation || ''} onChange={(e) => updatePage(i, 'translation', e.target.value)}
+                                    placeholder="English translation (shown in italics)"
+                                    className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                            )}
+                        </div>
+                    ))}
+
+                    <button onClick={addPage} className="w-full bg-gray-100 py-3 rounded-xl font-bold text-sm text-gray-600">+ Add Page</button>
+
+                    {tooBig && (
+                        <p className="text-xs text-red-500 font-bold" style={{ fontFamily: 'sans-serif' }}>
+                            Images total too large to sync ({Math.round(totalBytes / 1048576)}MB). Use fewer or smaller images.
+                        </p>
+                    )}
+
+                    <button onClick={save} disabled={busy || tooBig}
+                        className="w-full text-white py-3 rounded-xl font-bold text-sm active:scale-95 transition-all disabled:opacity-60"
+                        style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg,#10b981,#059669)' }}>
+                        {busy ? 'Saving...' : (initial ? 'Save Changes' : 'Create Story')}
+                    </button>
+                </div>
+            );
+        };
+
+
         // ── STORY SHELF (Gemini HTML stories + Videos) ────────────────────
         const StoryShelf = ({ lang, words, playAudio, onBack, registerShelfBack }) => {
             const [htmlStories, setHtmlStories] = useState([]);
@@ -2185,6 +2503,9 @@
             useEffect(() => { refresh(); }, []);
 
             if (activeHtml) {
+                if (isStudioStory(activeHtml)) {
+                    return <StudioReader story={activeHtml} onBack={() => { setActiveHtml(null); refresh(); }} />;
+                }
                 return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} />;
             }
 
@@ -2218,8 +2539,12 @@
                                         {htmlStories.map(story => (
                                             <button key={story.id} onClick={() => setActiveHtml(story)}
                                                 className="bg-white rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all overflow-hidden text-left border-b-8 border-purple-200 active:scale-[.99]">
-                                                <div className="h-36 bg-gradient-to-br from-indigo-400 to-purple-500 relative flex items-center justify-center">
-                                                    <span className="text-8xl drop-shadow-lg">📖</span>
+                                                <div className="h-36 bg-gradient-to-br from-indigo-400 to-purple-500 relative flex items-center justify-center overflow-hidden">
+                                                    {studioCover(story) ? (
+                                                        <img src={studioCover(story)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} />
+                                                    ) : (
+                                                        <span className="text-8xl drop-shadow-lg">📖</span>
+                                                    )}
                                                     <div className="absolute inset-0" style={{ background: 'linear-gradient(to top,rgba(0,0,0,0.35) 0%,transparent 60%)' }} />
                                                     <div className="absolute bottom-3 left-4 right-4">
                                                         <p className="text-white font-black text-base drop-shadow-md leading-tight">{story.title}</p>
@@ -2338,6 +2663,8 @@
             const [remoteStoryIds, setRemoteStoryIds] = useState(new Set());
             const [editingStory, setEditingStory] = useState(null);
             const [showPromptBuilder, setShowPromptBuilder] = useState(false);
+            const [showStudio, setShowStudio] = useState(false);
+            const [studioInitial, setStudioInitial] = useState(null);
             const [promptLang, setPromptLang] = useState('gungbe');
             const [promptIdea, setPromptIdea] = useState('');
             const [promptChild, setPromptChild] = useState('');
@@ -2615,6 +2942,38 @@
             };
 
             // Save title and language edits for a story (local + cloud metadata)
+            // Create or update a Story Studio (native flip-book) story
+            const saveStudioStory = async (data) => {
+                const id = data.id || ('studio_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+                const html = packStudioStory(data);
+                const pageCount = data.pages.length;
+                const story = { id, title: data.title, pageCount, author: 'Story Studio', html, lang: data.lang || null };
+                try {
+                    await dbSaveStory(story);
+                } catch (e) {
+                    showMsg('Could not save story: ' + e.message, true);
+                    return;
+                }
+                let syncNote = '';
+                try {
+                    await fsSaveStoryLink(story);
+                    syncNote = ' Synced to all devices.';
+                } catch (se) {
+                    syncNote = ' (Saved on this device only: ' + se.message + ')';
+                }
+                setShowStudio(false);
+                setStudioInitial(null);
+                await refresh();
+                showMsg('Saved "' + data.title + '"!' + syncNote);
+            };
+
+            const openStudioNew = () => { setStudioInitial(null); setShowStudio(true); setShowPromptBuilder(false); };
+            const openStudioEdit = (story) => {
+                const data = unpackStudioStory(story);
+                setStudioInitial(data);
+                setShowStudio(true);
+            };
+
             const saveStoryEdit = async () => {
                 if (!editingStory) return;
                 if (!editingStory.title.trim()) { showMsg('Title cannot be empty.', true); return; }
@@ -2648,28 +3007,37 @@
                 const langLabel = promptLang === 'gungbe' ? 'Gungbe' : 'Yoruba';
                 const langName = promptLang === 'gungbe'
                     ? 'Gungbe (also called Gun, a Gbe language spoken in Benin)'
-                    : 'Yoruba (as spoken in Nigeria, with correct diacritics)';
-                const childLine = promptChild.trim() ? 'The main character is a young child named ' + promptChild.trim() + '. ' : '';
-                const wordsLine = promptWords.trim() ? 'Naturally weave in these ' + langLabel + ' vocabulary words, repeating each at least twice: ' + promptWords.trim() + '. ' : '';
+                    : 'Yoruba (as spoken in Nigeria, with correct diacritics and tone marks)';
+                const childLine = promptChild.trim() ? 'The hero of the story is a young child named ' + promptChild.trim() + ', who should appear as a recurring cartoon character on every page. ' : '';
+                const wordsLine = promptWords.trim() ? 'Naturally weave in these ' + langLabel + ' vocabulary words, repeating each at least twice across the story: ' + promptWords.trim() + '. ' : '';
                 const lines = [
-                    'You are an author of storybooks for children and a front-end developer. Create an interactive bilingual storybook web page for a child aged 2 to 5 who is learning ' + langName + ' alongside English.',
+                    'You are a master childrens storybook illustrator and an expert front-end developer. Build a single self-contained HTML file: a rich, colourful, animated interactive storybook for a child aged 2 to 5 who is learning ' + langName + ' alongside English. It must feel like a real picture book that turns its pages, not a plain slideshow.',
                     '',
                     'STORY BRIEF: ' + promptIdea.trim(),
                     '',
-                    childLine + wordsLine + 'Keep sentences short, warm, rhythmic and repetitive - perfect for reading aloud. The story must have exactly ' + promptPages + ' story pages plus a final celebration page.',
+                    childLine + wordsLine + 'Write exactly ' + promptPages + ' story pages plus a final celebration page. Keep every sentence short, warm, rhythmic and repetitive so it is a joy to read aloud. Give the story a clear beginning, a gentle problem, and a happy ending.',
                     '',
-                    'OUTPUT FORMAT (follow every rule exactly):',
-                    '1. Return ONE single self-contained HTML file. All CSS and JavaScript must be inline. No external resources, fonts, images or libraries of any kind.',
+                    'ART STYLE - this is the most important part:',
+                    'A. Every page must have a large, full-scene CARTOON ILLUSTRATION drawn as inline SVG (vector). Do NOT rely on emoji as the artwork. Build each scene from SVG shapes: rounded characters with friendly faces and big eyes, skies with gradients, ground, trees, houses, animals, props - a complete picture that fills the page.',
+                    'B. Use bold, saturated, cheerful colours and soft rounded shapes (thick outlines, no sharp corners). Reuse the same character designs across pages so the child recognises them. Aim for the look of a modern animated cartoon.',
+                    'C. ANIMATE the scenes with CSS keyframe animations and SVG: characters gently bob, blink, wave or bounce; clouds drift; the sun rays rotate slowly; leaves, bubbles, stars or confetti float. Every page should have visible, looping motion that is lively but not dizzying. Use transform and opacity animations (and SMIL <animate> inside SVG where helpful).',
+                    'D. Emoji may be used only as small accents (e.g. a sparkle on a button), never as the main illustration.',
+                    '',
+                    'PAGE-TURN - real book feel:',
+                    'E. Lay the book out as a 3D scene: use perspective on a container and transform-style: preserve-3d on the pages. Turning to the next page must visibly FLIP like a real book page rotating around its spine (rotateY) with a smooth easing of about 0.7s, including a subtle shadow on the turning page. Going back flips the page the other way.',
+                    'F. Provide large, friendly Next and Back buttons (and ideally allow tapping the right/left side of the book to turn). Disable Back on the first page and Next on the last.',
+                    '',
+                    'OUTPUT CONTRACT (follow every rule exactly - the app depends on it):',
+                    '1. Return ONE single self-contained HTML file. ALL CSS and JavaScript inline. No external resources, fonts, images, CDNs or libraries of any kind. Everything must work fully offline.',
                     '2. The <title> must be exactly: Little Linguist | {Story Title}',
-                    '3. Each story page must be a <div class="page-card">. Show only one page at a time, with big friendly Next and Back buttons to move between pages.',
-                    '4. All artwork must be made of large emoji scenes only. Do not use <img> tags or any external pictures.',
-                    '5. Every page shows the ' + langLabel + ' text in large bold type, with the English translation underneath in smaller italic type.',
-                    '6. Add a speaker button on each page that reads the English text aloud using window.speechSynthesis, wrapped in try/catch so devices without speech support do not break.',
-                    '7. The final page must be a celebration page with confetti and star emoji and a cheerful well-done message.',
-                    '8. Use a bright, rounded, kid-friendly design with very large tap targets suitable for small fingers on a phone.',
-                    '9. Keep the entire file under 1MB.',
+                    '3. Each story page (and the celebration page) must be a <div class="page-card">. These are how the app counts pages, so every page needs this class. Show only one page at a time.',
+                    '4. On every page, show the ' + langLabel + ' sentence in large bold type, with the English translation directly underneath in smaller italic type. Keep text readable over the art (use a soft caption panel if needed).',
+                    '5. Put a round speaker button on each page that reads that pages English text aloud using window.speechSynthesis, wrapped in try/catch so devices without speech support never break.',
+                    '6. The final <div class="page-card"> is a celebration page: confetti animation, cheering characters and a big warm well-done message.',
+                    '7. Design for a phone held upright: very large tap targets, nothing tiny, no horizontal scrolling. The book should scale to fit any screen.',
+                    '8. Keep the whole file under 1MB. Favour clever reusable SVG and CSS over huge repeated markup.',
                     '',
-                    'Respond with ONLY the complete HTML file and nothing else.'
+                    'Respond with ONLY the complete HTML file, starting with <!DOCTYPE html> and nothing else.'
                 ];
                 setGeneratedPrompt(lines.join('\n'));
             };
@@ -2759,10 +3127,22 @@
                             style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
                             <Icon name="Upload" size={16} /> Import Gemini Story (.html)
                         </button>
+                        <button onClick={openStudioNew} disabled={busy}
+                            className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60 mt-2"
+                            style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #ec4899, #8b5cf6)' }}>
+                            <span>{'\uD83C\uDFA8'}</span> Create Story (Studio)
+                        </button>
+                        {showStudio && (
+                            <div className="bg-white border border-gray-200 rounded-xl p-4 mt-3">
+                                <StudioBuilder initial={studioInitial} showMsg={showMsg}
+                                    onSave={saveStudioStory}
+                                    onCancel={() => { setShowStudio(false); setStudioInitial(null); }} />
+                            </div>
+                        )}
                         <button onClick={() => setShowPromptBuilder(!showPromptBuilder)} disabled={busy}
                             className="w-full text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 text-sm active:scale-95 transition-all disabled:opacity-60 mt-2"
                             style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #f59e0b, #f97316)' }}>
-                            <span>{'\u2728'}</span> Build Story Prompt
+                            <span>{'\u2728'}</span> Build Story Prompt (for Gemini/Claude)
                         </button>
                         {showPromptBuilder && (
                             <div className="bg-white border border-gray-200 rounded-xl p-4 mt-3 space-y-2">
@@ -2830,7 +3210,7 @@
                                                 <button onClick={() => syncStoryToCloud(s)} disabled={busy} title="Sync to all devices"
                                                     className="bg-blue-50 p-2 rounded-lg shrink-0" style={{ fontSize: 14 }}>{'\u2601\uFE0F'}</button>
                                             )}
-                                            <button onClick={() => setEditingStory(editingStory && editingStory.id === s.id ? null : { id: s.id, title: s.title, lang: s.lang || null })}
+                                            <button onClick={() => { if (isStudioStory(s)) { openStudioEdit(s); } else { setEditingStory(editingStory && editingStory.id === s.id ? null : { id: s.id, title: s.title, lang: s.lang || null }); } }}
                                                 className="bg-gray-100 p-2 rounded-lg shrink-0" style={{ fontSize: 14 }}>{'\u270F\uFE0F'}</button>
                                             <button onClick={() => handleDeleteHtml(s.id)}
                                                 className="bg-red-50 text-red-400 p-2 rounded-lg hover:bg-red-100 transition-colors shrink-0">
