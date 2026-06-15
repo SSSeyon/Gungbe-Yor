@@ -891,7 +891,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.3.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.4.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1479,7 +1479,7 @@
                 );
             }
 
-            if (view === 'stickers') return <StickerBook stickers={stickers} onBack={backOrHome} />;
+            if (view === 'stickers') return <StickerBook stickers={stickers} onBack={backOrHome} onHome={goHome} />;
 
             // --- Category Picker ---
             if (view.startsWith('categories')) {
@@ -1525,17 +1525,17 @@
                 </div>
             );
 
-            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={backOrHome} theme={theme} />;
-            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={backOrHome} theme={theme} />;
-            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={backOrHome} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
-            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={backOrHome} registerShelfBack={(fn) => { shelfBackRef.current = fn; }} />;
+            if (view === 'learn') return gameWords.length === 0 ? noWordsMessage : <FlashCards words={gameWords} lang={lang} playAudio={playAudio} onBack={backOrHome} onHome={goHome} theme={theme} />;
+            if (view === 'listen') return gameWords.length === 0 ? noWordsMessage : <ListenRepeat words={gameWords} lang={lang} playAudio={playAudio} onBack={backOrHome} onHome={goHome} theme={theme} />;
+            if (view === 'quiz') return wordsWithAudio.length === 0 ? noWordsMessage : <QuizMode words={wordsWithAudio} category={category} lang={lang} playAudio={playAudio} onBack={backOrHome} onHome={goHome} theme={theme} stats={stats} updateStats={updateStats} stickers={stickers} setStickers={setStickers} />;
+            if (view === 'stories') return <StoryShelf lang={lang} words={words} playAudio={playAudio} onBack={backOrHome} onHome={goHome} registerShelfBack={(fn) => { shelfBackRef.current = fn; }} />;
             return null;
         };
 
-        const StickerBook = ({ stickers, onBack }) => (
+        const StickerBook = ({ stickers, onBack, onHome }) => (
             <div className="p-4 max-w-4xl mx-auto animate-pop">
                 <div className="flex items-center gap-4 mb-6">
-                    <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                    <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
                     <h2 className="text-3xl font-black text-gray-700">My Stickers! ⭐</h2>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
@@ -1564,7 +1564,7 @@
             </div>
         );
 
-        const FlashCards = ({ words, lang, playAudio, onBack, theme }) => {
+        const FlashCards = ({ words, lang, playAudio, onBack, onHome, theme }) => {
             const [index, setIndex] = useState(0);
             const [isFlipped, setIsFlipped] = useState(false);
             const [showStar, setShowStar] = useState(false);
@@ -1648,7 +1648,7 @@
                     {showStar && <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none text-[120px] animate-star">⭐</div>}
 
                     <div className="w-full max-w-sm flex justify-between items-center mb-4">
-                        <button onClick={onBack} className="bg-white/80 backdrop-blur p-3 rounded-full shadow text-gray-600 text-xl">🏠</button>
+                        <button onClick={onHome || onBack} className="bg-white/80 backdrop-blur p-3 rounded-full shadow text-gray-600 text-xl">🏠</button>
                         <span className="bg-white/80 backdrop-blur px-5 py-2 rounded-full font-black text-gray-600 shadow-sm text-lg">{index+1} / {words.length}</span>
                     </div>
 
@@ -1679,7 +1679,7 @@
             );
         };
 
-        const ListenRepeat = ({ words, lang, playAudio, onBack, theme }) => {
+        const ListenRepeat = ({ words, lang, playAudio, onBack, onHome, theme }) => {
             const [index, setIndex] = useState(0);
             const [played, setPlayed] = useState(false);
             const word = words[index];
@@ -1701,7 +1701,7 @@
             return (
                 <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 animate-pop">
                     <div className="w-full max-w-sm flex justify-between items-center mb-6">
-                        <button onClick={onBack} className="bg-white/80 p-3 rounded-full shadow text-xl">🏠</button>
+                        <button onClick={onHome || onBack} className="bg-white/80 p-3 rounded-full shadow text-xl">🏠</button>
                         <span className="bg-white/80 px-5 py-2 rounded-full font-black text-gray-600 shadow-sm text-lg">{index+1} / {words.length}</span>
                     </div>
                     <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-10 flex flex-col items-center border-b-[14px] border-purple-200">
@@ -1724,7 +1724,7 @@
             );
         };
 
-        const QuizMode = ({ words, category, lang, playAudio, onBack, theme, stats, updateStats, stickers, setStickers }) => {
+        const QuizMode = ({ words, category, lang, playAudio, onBack, onHome, theme, stats, updateStats, stickers, setStickers }) => {
              const [q, setQ] = useState(null);
              const [opts, setOpts] = useState([]);
              const [score, setScore] = useState(0);
@@ -1819,7 +1819,7 @@
                          </div>
                      )}
                      <div className="w-full flex justify-between items-center mb-6">
-                         <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                         <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
                          <div className="bg-white px-5 py-3 rounded-full font-black text-yellow-500 shadow-sm border-2 border-yellow-100 flex items-center gap-2 text-2xl">⭐ {score}</div>
                      </div>
                      <div className="text-center mb-6 w-full">
@@ -1854,7 +1854,7 @@
 
 
         // ── VIDEO PLAYER ──────────────────────────────────────────────────
-        const VideoPlayer = ({ video, onBack }) => {
+        const VideoPlayer = ({ video, onBack, onHome }) => {
             const videoRef = useRef(null);
             const iframeRef = useRef(null);
             const containerRef = useRef(null);
@@ -2164,6 +2164,17 @@
             return STUDIO_SENTINEL + JSON.stringify(payload);
         };
 
+        // Approximate stored size of a story, shown in the Stories tab.
+        // Uses the UTF-16-ish byte estimate of the html payload.
+        const storySize = (story) => {
+            const chars = (story && typeof story.html === 'string') ? story.html.length : 0;
+            // base64/text chars are ~1 byte each in transit; estimate bytes
+            const bytes = chars;
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        };
+
         // First page image of a studio story, used as the shelf cover
         const studioCover = (story) => {
             if (!isStudioStory(story)) return null;
@@ -2209,7 +2220,7 @@
         };
 
         // ── STUDIO READER: native flip-book ──
-        const StudioReader = ({ story, onBack }) => {
+        const StudioReader = ({ story, onBack, onHome }) => {
             const data = useMemo(() => unpackStudioStory(story), [story.id]);
             const pages = data.pages;
             const [index, setIndex] = useState(0);
@@ -2252,7 +2263,7 @@
                 <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'linear-gradient(160deg,#1e1b4b,#0f0f1a)', display: 'flex', flexDirection: 'column' }}>
                     {/* Top bar */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', flexShrink: 0 }}>
-                        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: '50%', width: 40, height: 40, color: 'white', fontSize: 18 }}>🏠</button>
+                        <button onClick={onHome || onBack} style={{ background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: '50%', width: 40, height: 40, color: 'white', fontSize: 18 }}>🏠</button>
                         <div style={{ flex: 1, textAlign: 'center', color: 'rgba(255,255,255,0.65)', fontSize: 13, fontFamily: 'sans-serif', fontWeight: 700 }}>{story.title}</div>
                         <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'sans-serif', minWidth: 44, textAlign: 'right' }}>{index + 1}/{pages.length}</div>
                     </div>
@@ -2451,7 +2462,7 @@
 
 
         // ── STORY SHELF (Gemini HTML stories + Videos) ────────────────────
-        const StoryShelf = ({ lang, words, playAudio, onBack, registerShelfBack }) => {
+        const StoryShelf = ({ lang, words, playAudio, onBack, onHome, registerShelfBack }) => {
             const [htmlStories, setHtmlStories] = useState([]);
             const [videos, setVideos] = useState([]);
             const [loading, setLoading] = useState(true);
@@ -2504,13 +2515,13 @@
 
             if (activeHtml) {
                 if (isStudioStory(activeHtml)) {
-                    return <StudioReader story={activeHtml} onBack={() => { setActiveHtml(null); refresh(); }} />;
+                    return <StudioReader story={activeHtml} onBack={() => { setActiveHtml(null); refresh(); }} onHome={() => { setActiveHtml(null); if (onHome) onHome(); }} />;
                 }
-                return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} />;
+                return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} onHome={() => { setActiveHtml(null); if (onHome) onHome(); }} />;
             }
 
             if (activeVideo) {
-                return <VideoPlayer video={activeVideo} onBack={() => { setActiveVideo(null); refresh(); }} />;
+                return <VideoPlayer video={activeVideo} onBack={() => { setActiveVideo(null); refresh(); }} onHome={() => { setActiveVideo(null); if (onHome) onHome(); }} />;
             }
 
             const isEmpty = htmlStories.length === 0 && videos.length === 0;
@@ -2518,7 +2529,7 @@
             return (
                 <div className="p-4 max-w-2xl mx-auto animate-pop">
                     <div className="flex items-center gap-4 mb-5">
-                        <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 text-2xl">🏠</button>
+                        <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 text-2xl">🏠</button>
                         <h2 className="text-3xl font-black text-gray-700">Story Time 📖</h2>
                     </div>
                     {loading ? (
@@ -2605,7 +2616,7 @@
         };
 
         // ── STORY VIEWER (Gemini HTML - unchanged) ────────────────────────
-        const StoryViewer = ({ story, lang, words, playAudio, onBack }) => {
+        const StoryViewer = ({ story, lang, words, playAudio, onBack, onHome }) => {
             const iframeRef = useRef(null);
             const blobUrlRef = useRef(null);
             const [ready, setReady] = useState(false);
@@ -2641,7 +2652,7 @@
                         sandbox="allow-scripts allow-same-origin"
                     />
                     <div style={{ background: 'rgba(15,15,26,0.92)', backdropFilter: 'blur(8px)', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                        <button onClick={onBack} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 38, height: 38, color: 'white', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏠</button>
+                        <button onClick={onHome || onBack} style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: '50%', width: 38, height: 38, color: 'white', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🏠</button>
                         <div style={{ flex: 1, textAlign: 'center' }}>
                             <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'sans-serif' }}>{story.title}</span>
                         </div>
@@ -2670,6 +2681,8 @@
             const [promptChild, setPromptChild] = useState('');
             const [promptPages, setPromptPages] = useState(6);
             const [promptWords, setPromptWords] = useState('');
+            const [selectedWordIds, setSelectedWordIds] = useState([]);
+            const [wordPickerCat, setWordPickerCat] = useState('All');
             const [generatedPrompt, setGeneratedPrompt] = useState('');
             const [videoTitle, setVideoTitle] = useState('');
             const [videoUrl, setVideoUrl] = useState('');
@@ -3001,41 +3014,56 @@
                 setBusy(false);
             };
 
-            // Build a complete AI story-generation prompt from the form
+            // Build a complete AI story-generation prompt from the form.
+            // Vocabulary always comes from the user's own word database using
+            // THEIR spellings; the English translation is given to the AI in
+            // brackets purely as a guide.
             const buildStoryPrompt = () => {
                 if (!promptIdea.trim()) { showMsg('Describe the story idea first.', true); return; }
                 const langLabel = promptLang === 'gungbe' ? 'Gungbe' : 'Yoruba';
                 const langName = promptLang === 'gungbe'
                     ? 'Gungbe (also called Gun, a Gbe language spoken in Benin)'
-                    : 'Yoruba (as spoken in Nigeria, with correct diacritics and tone marks)';
-                const childLine = promptChild.trim() ? 'The hero of the story is a young child named ' + promptChild.trim() + ', who should appear as a recurring cartoon character on every page. ' : '';
-                const wordsLine = promptWords.trim() ? 'Naturally weave in these ' + langLabel + ' vocabulary words, repeating each at least twice across the story: ' + promptWords.trim() + '. ' : '';
+                    : 'Yoruba (as spoken in Nigeria)';
+                const childLine = promptChild.trim() ? 'The hero of the story is a young child named ' + promptChild.trim() + ', who should appear as the same recurring character on every page. ' : '';
+                // Pull the chosen words from the user's own database, using their spelling
+                const chosen = (words || []).filter(w => selectedWordIds.indexOf(w.id) !== -1 && (w[promptLang] || '').trim());
+                const wordPairs = chosen.map(w => w[promptLang].trim() + ' (' + w.english.trim() + ')');
+                const vocabBlock = wordPairs.length
+                    ? ('VOCABULARY TO TEACH - use EXACTLY these ' + langLabel + ' spellings, do not change or re-spell them, and do not substitute words from any other source. The English meaning is shown in brackets only to guide you:\n' + wordPairs.map(p => '- ' + p).join('\n'))
+                    : ('VOCABULARY: weave in a few simple, age-appropriate ' + langLabel + ' words and keep their spelling consistent across the story.');
+                const wovenInstruction = wordPairs.length
+                    ? ('Write the story in ENGLISH, and naturally weave in each of the ' + langLabel + ' vocabulary words above, in the EXACT spelling given, repeating each at least twice. Write only the ' + langLabel + ' word itself in the sentence (not the English in brackets). For example: She picked up the ' + (chosen[0] ? chosen[0][promptLang].trim() : 'word') + ' and smiled.')
+                    : ('Write the story in ENGLISH and weave in the chosen ' + langLabel + ' words naturally, repeating each at least twice.');
                 const lines = [
-                    'You are a master childrens storybook illustrator and an expert front-end developer. Build a single self-contained HTML file: a rich, colourful, animated interactive storybook for a child aged 2 to 5 who is learning ' + langName + ' alongside English. It must feel like a real picture book that turns its pages, not a plain slideshow.',
+                    'You are a master childrens storybook author and illustrator. Create a single self-contained HTML storybook file for a child aged 2 to 5 who is learning ' + langName + ' alongside English. It must feel like a real, beautiful printed picture book that turns its pages.',
                     '',
                     'STORY BRIEF: ' + promptIdea.trim(),
                     '',
-                    childLine + wordsLine + 'Write exactly ' + promptPages + ' story pages plus a final celebration page. Keep every sentence short, warm, rhythmic and repetitive so it is a joy to read aloud. Give the story a clear beginning, a gentle problem, and a happy ending.',
+                    childLine + 'Write exactly ' + promptPages + ' story pages plus a final celebration page. Keep every sentence short, warm, rhythmic and repetitive so it is a joy to read aloud. Give the story a clear beginning, a gentle problem, and a happy ending.',
                     '',
-                    'ART STYLE - this is the most important part:',
-                    'A. Every page must have a large, full-scene CARTOON ILLUSTRATION drawn as inline SVG (vector). Do NOT rely on emoji as the artwork. Build each scene from SVG shapes: rounded characters with friendly faces and big eyes, skies with gradients, ground, trees, houses, animals, props - a complete picture that fills the page.',
-                    'B. Use bold, saturated, cheerful colours and soft rounded shapes (thick outlines, no sharp corners). Reuse the same character designs across pages so the child recognises them. Aim for the look of a modern animated cartoon.',
-                    'C. ANIMATE the scenes with CSS keyframe animations and SVG: characters gently bob, blink, wave or bounce; clouds drift; the sun rays rotate slowly; leaves, bubbles, stars or confetti float. Every page should have visible, looping motion that is lively but not dizzying. Use transform and opacity animations (and SMIL <animate> inside SVG where helpful).',
-                    'D. Emoji may be used only as small accents (e.g. a sparkle on a button), never as the main illustration.',
+                    vocabBlock,
+                    '',
+                    wovenInstruction,
+                    '',
+                    'ART STYLE - the pictures must be beautiful, NOT code drawings:',
+                    'A. Every page needs a large, full-page illustration in a warm, high-quality PHOTOREALISTIC 3D CARTOON style (think modern animated film: soft lighting, rounded forms, expressive faces, rich colour and depth). Do NOT draw the art with inline SVG, CSS shapes, or emoji - those look flat and are not acceptable.',
+                    'B. Provide each illustration as a real raster image embedded directly in the HTML as a base64 data URI in an <img> tag (for example src="data:image/jpeg;base64,..."). If you cannot embed real generated images, then leave a clearly marked <img> placeholder per page with a detailed alt description of the scene, sized to fill the page, so the pictures can be dropped in afterwards.',
+                    'C. Keep the same character designs, clothing and colours consistent on every page so the child recognises the hero throughout.',
+                    'D. Gentle motion is welcome via CSS only (a slow zoom or drift on the image, a soft bob), but the artwork itself must be raster images, not vector shapes.',
                     '',
                     'PAGE-TURN - real book feel:',
-                    'E. Lay the book out as a 3D scene: use perspective on a container and transform-style: preserve-3d on the pages. Turning to the next page must visibly FLIP like a real book page rotating around its spine (rotateY) with a smooth easing of about 0.7s, including a subtle shadow on the turning page. Going back flips the page the other way.',
-                    'F. Provide large, friendly Next and Back buttons (and ideally allow tapping the right/left side of the book to turn). Disable Back on the first page and Next on the last.',
+                    'E. Lay the book out as a 3D scene: use perspective on a container and transform-style: preserve-3d on the pages. Turning to the next page must visibly FLIP like a real book page rotating around its spine (rotateY) with smooth easing of about 0.7s and a soft shadow on the turning page. Going back flips the other way.',
+                    'F. Provide large, friendly Next and Back buttons, and allow tapping the right or left side of the book to turn. Disable Back on the first page and Next on the last.',
                     '',
                     'OUTPUT CONTRACT (follow every rule exactly - the app depends on it):',
-                    '1. Return ONE single self-contained HTML file. ALL CSS and JavaScript inline. No external resources, fonts, images, CDNs or libraries of any kind. Everything must work fully offline.',
+                    '1. Return ONE single self-contained HTML file. All CSS and JavaScript inline. No external resources, fonts, CDNs or libraries. The only embedded data may be base64 images. It must work fully offline.',
                     '2. The <title> must be exactly: Little Linguist | {Story Title}',
                     '3. Each story page (and the celebration page) must be a <div class="page-card">. These are how the app counts pages, so every page needs this class. Show only one page at a time.',
-                    '4. On every page, show the ' + langLabel + ' sentence in large bold type, with the English translation directly underneath in smaller italic type. Keep text readable over the art (use a soft caption panel if needed).',
-                    '5. Put a round speaker button on each page that reads that pages English text aloud using window.speechSynthesis, wrapped in try/catch so devices without speech support never break.',
-                    '6. The final <div class="page-card"> is a celebration page: confetti animation, cheering characters and a big warm well-done message.',
+                    '4. On every page, show the English sentence (with the ' + langLabel + ' words inside it) in large bold type over or beneath the picture, kept easily readable with a soft caption panel.',
+                    '5. Put a round speaker button on each page that reads the page text aloud using window.speechSynthesis, wrapped in try/catch so devices without speech support never break.',
+                    '6. The final <div class="page-card"> is a celebration page with a big warm well-done message.',
                     '7. Design for a phone held upright: very large tap targets, nothing tiny, no horizontal scrolling. The book should scale to fit any screen.',
-                    '8. Keep the whole file under 1MB. Favour clever reusable SVG and CSS over huge repeated markup.',
+                    '8. Embedded images make the file large; that is fine, but compress images sensibly (JPEG, reasonable resolution) so the whole file stays a few MB at most.',
                     '',
                     'Respond with ONLY the complete HTML file, starting with <!DOCTYPE html> and nothing else.'
                 ];
@@ -3173,9 +3201,36 @@
                                         </button>
                                     ))}
                                 </div>
-                                <input value={promptWords} onChange={(e) => setPromptWords(e.target.value)}
-                                    placeholder="Vocabulary words to include (optional, comma separated)"
-                                    className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
+                                <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                                    <p className="text-xs font-black text-gray-500" style={{ fontFamily: 'sans-serif' }}>
+                                        Pick words to teach (from your own word list, your spelling)
+                                    </p>
+                                    <div className="flex gap-2 overflow-x-auto pb-1">
+                                        {['All', 'Animals', 'Food', 'Daily', 'Clothing', 'Colors', 'Numbers', 'Greetings'].map(cat => (
+                                            <button key={cat} onClick={() => setWordPickerCat(cat)}
+                                                className="shrink-0 px-3 py-1 rounded-full text-xs font-bold border"
+                                                style={{ background: wordPickerCat === cat ? '#6366f1' : '#fff', color: wordPickerCat === cat ? '#fff' : '#6b7280', borderColor: wordPickerCat === cat ? '#6366f1' : '#e5e7eb' }}>
+                                                {cat}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2" style={{ flexWrap: 'wrap', maxHeight: 160, overflowY: 'auto' }}>
+                                        {(words || []).filter(w => (wordPickerCat === 'All' || w.category === wordPickerCat) && (w[promptLang] || '').trim()).map(w => {
+                                            const on = selectedWordIds.indexOf(w.id) !== -1;
+                                            return (
+                                                <button key={w.id}
+                                                    onClick={() => setSelectedWordIds(on ? selectedWordIds.filter(id => id !== w.id) : [...selectedWordIds, w.id])}
+                                                    className="px-3 py-1 rounded-full text-xs font-bold border"
+                                                    style={{ background: on ? '#10b981' : '#fff', color: on ? '#fff' : '#374151', borderColor: on ? '#10b981' : '#e5e7eb' }}>
+                                                    {w[promptLang]} {on ? '✓' : ''}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                        {selectedWordIds.length} word{selectedWordIds.length === 1 ? '' : 's'} selected. The AI receives your exact spelling with the English in brackets as a guide.
+                                    </p>
+                                </div>
                                 <button onClick={buildStoryPrompt}
                                     className="w-full text-white py-2 rounded-lg font-bold text-sm active:scale-95 transition-all"
                                     style={{ fontFamily: 'sans-serif', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
@@ -3203,7 +3258,7 @@
                                             <div className="flex-1 min-w-0">
                                                 <p className="font-bold text-gray-700 text-sm truncate">{s.title}</p>
                                                 <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
-                                                    {s.pageCount || '?'} pages{s.lang ? ' | ' + (s.lang === 'gungbe' ? 'Gungbe' : 'Yoruba') : ' | All'}{remoteStoryIds.has(s.id) ? ' | \u2601\uFE0F Synced' : ' | This device only'}
+                                                    {s.pageCount || '?'} pages | {storySize(s)}{s.lang ? ' | ' + (s.lang === 'gungbe' ? 'Gungbe' : 'Yoruba') : ' | All'}{remoteStoryIds.has(s.id) ? ' | \u2601\uFE0F Synced' : ' | This device only'}
                                                 </p>
                                             </div>
                                             {!remoteStoryIds.has(s.id) && (
