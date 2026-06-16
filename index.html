@@ -1527,7 +1527,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.5.2</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.5.4</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -3411,6 +3411,7 @@
             const [promptIdea, setPromptIdea] = useState('');
             const [promptChild, setPromptChild] = useState('');
             const [promptPages, setPromptPages] = useState(6);
+            const [promptTarget, setPromptTarget] = useState('html');
             const [promptWords, setPromptWords] = useState('');
             const [selectedWordIds, setSelectedWordIds] = useState([]);
             const [wordPickerCat, setWordPickerCat] = useState('All');
@@ -3781,6 +3782,47 @@
                 const wovenInstruction = wordPairs.length
                     ? ('Write the story in ENGLISH, and naturally weave in each of the ' + langLabel + ' vocabulary words above, in the EXACT spelling given, repeating each at least twice. Write only the ' + langLabel + ' word itself in the sentence (not the English in brackets). For example: She picked up the ' + (chosen[0] ? chosen[0][promptLang].trim() : 'word') + ' and smiled.')
                     : ('Write the story in ENGLISH and weave in the chosen ' + langLabel + ' words naturally, repeating each at least twice.');
+                // Gemini Storybook gem flavour: that gem natively generates and
+                // embeds real raster art, so we lean into illustration direction
+                // and a strict page-card output contract rather than asking it to
+                // draw with SVG or leave placeholders.
+                if (promptTarget === 'gemini') {
+                    const gLines = [
+                        'You are a master childrens storybook author and illustrator with the ability to generate real, fully painted illustrations. Create a single self-contained HTML storybook file for a child aged 2 to 5 who is learning ' + langName + ' alongside English. It must feel like a real, beautiful printed picture book that turns its pages.',
+                        '',
+                        'STORY BRIEF: ' + promptIdea.trim(),
+                        '',
+                        childLine + 'Write exactly ' + promptPages + ' story pages plus a final celebration page. Keep every sentence short, warm, rhythmic and repetitive so it is a joy to read aloud. Give the story a clear beginning, a gentle problem, and a happy ending.',
+                        '',
+                        vocabBlock,
+                        '',
+                        wovenInstruction,
+                        '',
+                        'ART STYLE - generate REAL pictures, never code drawings:',
+                        'A. For every page, GENERATE an actual full-page illustration in a warm, high-quality PHOTOREALISTIC 3D CARTOON style, like a modern Pixar or DreamWorks animated film: soft cinematic lighting, rounded forms, expressive faces, rich colour and real depth. This is a HARD requirement.',
+                        'B. Embed each generated illustration directly in the HTML as a base64 JPEG or PNG data URI inside an <img> tag, for example src="data:image/jpeg;base64,...". Do NOT use inline SVG, CSS shapes, gradients, divs or emoji for the artwork under any circumstances - flat vector or geometric art is rejected and unusable. Do NOT leave empty placeholders; every page must contain a real generated picture.',
+                        'C. Keep the same character design, clothing and colours for the hero on every single page so the child recognises them throughout. Describe the hero once to yourself and reuse that exact look.',
+                        'D. Each illustration should fill the page edge to edge behind a soft caption panel. Gentle CSS motion (a slow zoom or drift on the image, a soft bob) is welcome, but the artwork itself must be the real raster image.',
+                        '',
+                        'PAGE-TURN - real book feel:',
+                        'E. Lay the book out as a 3D scene: use perspective on a container and transform-style: preserve-3d on the pages. Turning to the next page must visibly FLIP like a real book page rotating around its spine (rotateY) with smooth easing of about 0.7s and a soft shadow on the turning page. Going back flips the other way.',
+                        'F. Provide large, friendly Next and Back buttons, and allow tapping the right or left side of the book to turn. Disable Back on the first page and Next on the last.',
+                        '',
+                        'OUTPUT CONTRACT (follow every rule exactly - the Little Linguist app depends on it):',
+                        '1. Return ONE single self-contained HTML file. All CSS and JavaScript inline. No external resources, fonts, CDNs or libraries. The only embedded data may be the base64 images you generate. It must work fully offline.',
+                        '2. The <title> must be exactly: Little Linguist | {Story Title}',
+                        '3. Each story page (and the celebration page) must be a <div class="page-card">. These are how the app counts pages, so every page needs this class. Show only one page at a time.',
+                        '4. On every page, show the English sentence (with the ' + langLabel + ' words inside it) in large bold type over a soft caption panel, kept easily readable.',
+                        '5. Put a round speaker button on each page that reads the page text aloud using window.speechSynthesis, wrapped in try/catch so devices without speech support never break.',
+                        '6. The final <div class="page-card"> is a celebration page with a big warm well-done message and a happy group picture of the hero.',
+                        '7. Design for a phone held upright: very large tap targets, nothing tiny, no horizontal scrolling. The book should scale to fit any screen.',
+                        '8. Compress the generated images sensibly (JPEG, reasonable resolution) so the whole file stays a few MB at most.',
+                        '',
+                        'Respond with ONLY the complete HTML file, starting with <!DOCTYPE html> and nothing else.'
+                    ];
+                    setGeneratedPrompt(gLines.join('\n'));
+                    return;
+                }
                 const lines = [
                     'You are a master childrens storybook author and illustrator. Create a single self-contained HTML storybook file for a child aged 2 to 5 who is learning ' + langName + ' alongside English. It must feel like a real, beautiful printed picture book that turns its pages.',
                     '',
@@ -3793,8 +3835,8 @@
                     wovenInstruction,
                     '',
                     'ART STYLE - the pictures must be beautiful, NOT code drawings:',
-                    'A. Every page needs a large, full-page illustration in a warm, high-quality PHOTOREALISTIC 3D CARTOON style (think modern animated film: soft lighting, rounded forms, expressive faces, rich colour and depth). Do NOT draw the art with inline SVG, CSS shapes, or emoji - those look flat and are not acceptable.',
-                    'B. Provide each illustration as a real raster image embedded directly in the HTML as a base64 data URI in an <img> tag (for example src="data:image/jpeg;base64,..."). If you cannot embed real generated images, then leave a clearly marked <img> placeholder per page with a detailed alt description of the scene, sized to fill the page, so the pictures can be dropped in afterwards.',
+                    'A. Every page needs a large, full-page illustration in a warm, high-quality PHOTOREALISTIC 3D CARTOON style, like a modern Pixar or DreamWorks animated film: soft cinematic lighting, rounded forms, expressive faces, rich colour and real depth. This is a HARD requirement. You must NOT draw the art with inline SVG, CSS shapes, gradients, divs, or emoji under any circumstances - flat vector or geometric art is rejected and unusable. If you are tempted to build a picture out of SVG or CSS, do not; use a real raster image instead.',
+                    'B. Provide each illustration as a real, fully rendered raster image (an actual generated photo-style cartoon picture) embedded directly in the HTML as a base64 JPEG or PNG data URI inside an <img> tag, for example src="data:image/jpeg;base64,...". The image must be a genuine generated picture, not a placeholder, not a coloured box, and not a description. If your tool truly cannot generate and embed real raster images in one shot, then for each page output an empty <img class="page-art"> tag with a detailed, vivid alt description of the exact scene (characters, setting, action, mood) sized to fill the page, so a real photo-style cartoon image can be dropped in afterwards. Never substitute SVG or CSS art for a missing picture.',
                     'C. Keep the same character designs, clothing and colours consistent on every page so the child recognises the hero throughout.',
                     'D. Gentle motion is welcome via CSS only (a slow zoom or drift on the image, a soft bob), but the artwork itself must be raster images, not vector shapes.',
                     '',
@@ -3923,6 +3965,20 @@
                             <div className="bg-white border border-gray-200 rounded-xl p-4 mt-3 space-y-2">
                                 <p className="text-sm font-black text-gray-700" style={{ fontFamily: 'sans-serif' }}>Describe the story you want</p>
                                 <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>This builds a ready-made prompt for Gemini, Claude or ChatGPT. Paste the HTML file it returns back here using Import.</p>
+                                <div className="flex gap-2">
+                                    {[['html', 'Gemini / Claude / ChatGPT'], ['gemini', 'Gemini Storybook gem']].map(opt => (
+                                        <button key={opt[0]} onClick={() => setPromptTarget(opt[0])}
+                                            className="flex-1 py-2 rounded-lg font-bold text-xs border"
+                                            style={{ background: promptTarget === opt[0] ? '#0ea5e9' : '#fff', color: promptTarget === opt[0] ? '#fff' : '#6b7280', borderColor: promptTarget === opt[0] ? '#0ea5e9' : '#e5e7eb' }}>
+                                            {opt[1]}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                    {promptTarget === 'gemini'
+                                        ? 'Tuned for the Gemini Storybook gem: it generates real cartoon pictures itself, so the prompt tells it to paint and embed every page.'
+                                        : 'General prompt for chat AIs that may not draw real pictures one-shot.'}
+                                </p>
                                 <div className="flex gap-2">
                                     {[['gungbe', 'Gungbe'], ['yoruba', 'Yoruba']].map(opt => (
                                         <button key={opt[0]} onClick={() => setPromptLang(opt[0])}
