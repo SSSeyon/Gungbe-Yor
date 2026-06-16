@@ -1,23 +1,21 @@
-const CACHE_NAME = 'little-linguist-v9';
+const CACHE_NAME = 'little-linguist-v10';
 
-// Local files to pre-cache on install. The heavy libraries are now self-hosted
-// under vendor/ so the app no longer depends on any third-party CDN and works
-// fully offline from the very first load once installed.
+// Local app files to pre-cache on install.
 const LOCAL_ASSETS = [
   '/Gungbe-Yor/',
   '/Gungbe-Yor/index.html',
   '/Gungbe-Yor/manifest.json',
   '/Gungbe-Yor/icon-192.png',
   '/Gungbe-Yor/icon-512.png',
-  '/Gungbe-Yor/vendor/react.production.min.js',
-  '/Gungbe-Yor/vendor/react-dom.production.min.js',
-  '/Gungbe-Yor/vendor/babel.min.js',
-  '/Gungbe-Yor/vendor/confetti.browser.min.js',
 ];
 
-// Firebase compat SDK is loaded from gstatic (browser-ready build). Precache it
-// best-effort so the app still works offline after the first successful load.
+// CDN libraries (browser-ready builds). Pre-cached best-effort so the app works
+// offline after the first successful online load. Confetti is inlined in
+// index.html so it is not listed here.
 const CDN_ASSETS = [
+  'https://unpkg.com/react@18/umd/react.production.min.js',
+  'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
+  'https://unpkg.com/@babel/standalone/babel.min.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js',
@@ -27,14 +25,7 @@ const CDN_ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    // Cache each asset best-effort so one missing file never blocks install
-    await Promise.allSettled(
-      LOCAL_ASSETS.map(url =>
-        fetch(url, { cache: 'reload' })
-          .then(res => { if (res.ok) return cache.put(url, res); })
-          .catch(() => {})
-      )
-    );
+    await cache.addAll(LOCAL_ASSETS).catch(() => {});
     await Promise.allSettled(
       CDN_ASSETS.map(url =>
         fetch(url)
@@ -63,26 +54,13 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = request.url;
 
-  // Only handle GET requests
   if (request.method !== 'GET') return;
 
-  // Self-hosted vendor libraries: cache-first (versioned, won't change between
-  // deploys; a new library version ships as a new file or a cache bump)
-  if (url.includes('/vendor/')) {
-    event.respondWith(
-      caches.match(request).then(cached => {
-        if (cached) return cached;
-        return fetch(request).then(res => {
-          if (res.ok) caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
-          return res;
-        }).catch(() => caches.match(request));
-      })
-    );
-    return;
-  }
-
-  // gstatic Firebase SDK: cache-first (versioned, immutable)
-  if (url.indexOf('gstatic.com/firebasejs/') !== -1) {
+  // CDN libraries (unpkg + gstatic Firebase): cache-first, they are versioned
+  const isCdn = CDN_ASSETS.some(cdn => url === cdn) ||
+                url.indexOf('unpkg.com/') !== -1 ||
+                url.indexOf('gstatic.com/firebasejs/') !== -1;
+  if (isCdn) {
     event.respondWith(
       caches.match(request).then(cached => {
         if (cached) return cached;
@@ -125,7 +103,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Requests with cache-buster (?t=...) go straight to network - never intercept
+  // Cache-buster (?t=...) requests go straight to network
   if (url.includes('?t=')) return;
 
   // Local origin files: network-first, fall back to cache for offline
