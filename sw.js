@@ -1,35 +1,32 @@
-const CACHE_NAME = 'little-linguist-v7';
+const CACHE_NAME = 'little-linguist-v8';
 
-// CDN scripts to pre-cache on install (Tailwind is now inlined so not needed)
-const CDN_ASSETS = [
-  'https://unpkg.com/react@18/umd/react.production.min.js',
-  'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js',
-  'https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js',
-];
-
-// Local files to pre-cache on install
+// Local files to pre-cache on install. The heavy libraries are now self-hosted
+// under vendor/ so the app no longer depends on any third-party CDN and works
+// fully offline from the very first load once installed.
 const LOCAL_ASSETS = [
   '/Gungbe-Yor/',
   '/Gungbe-Yor/index.html',
   '/Gungbe-Yor/manifest.json',
   '/Gungbe-Yor/icon-192.png',
   '/Gungbe-Yor/icon-512.png',
+  '/Gungbe-Yor/vendor/react.production.min.js',
+  '/Gungbe-Yor/vendor/react-dom.production.min.js',
+  '/Gungbe-Yor/vendor/babel.min.js',
+  '/Gungbe-Yor/vendor/confetti.browser.min.js',
+  '/Gungbe-Yor/vendor/firebase-app-compat.js',
+  '/Gungbe-Yor/vendor/firebase-firestore-compat.js',
+  '/Gungbe-Yor/vendor/firebase-storage-compat.js',
 ];
 
-// ── Install: pre-cache everything ──────────────────────────────────────────
+// -- Install: pre-cache everything ------------------------------------------
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-
-    // Cache local files (must succeed)
-    await cache.addAll(LOCAL_ASSETS).catch(() => {});
-
-    // Cache CDN scripts (best effort — don't block install if offline)
+    // Cache each asset best-effort so one missing file never blocks install
     await Promise.allSettled(
-      CDN_ASSETS.map(url =>
-        fetch(url)
-          .then(res => { if (res.ok) cache.put(url, res); })
+      LOCAL_ASSETS.map(url =>
+        fetch(url, { cache: 'reload' })
+          .then(res => { if (res.ok) return cache.put(url, res); })
           .catch(() => {})
       )
     );
@@ -37,7 +34,7 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// ── Activate: clean up old caches ──────────────────────────────────────────
+// -- Activate: clean up old caches ------------------------------------------
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -49,7 +46,7 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// ── Fetch ───────────────────────────────────────────────────────────────────
+// -- Fetch -------------------------------------------------------------------
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = request.url;
@@ -57,9 +54,9 @@ self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (request.method !== 'GET') return;
 
-  // CDN assets: cache-first (they are versioned and won't change)
-  const isCdn = CDN_ASSETS.some(cdn => url.startsWith(cdn));
-  if (isCdn) {
+  // Self-hosted vendor libraries: cache-first (versioned, won't change between
+  // deploys; a new library version ships as a new file or a cache bump)
+  if (url.includes('/vendor/')) {
     event.respondWith(
       caches.match(request).then(cached => {
         if (cached) return cached;
@@ -73,7 +70,6 @@ self.addEventListener('fetch', (event) => {
   }
 
   // version.json: network-first, short timeout, fall back to cache
-  // (so update banner appears quickly but works offline too)
   if (url.includes('version.json')) {
     event.respondWith(
       Promise.race([
@@ -88,13 +84,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Firebase Storage videos: cache-first after first play
-  // On first request, fetch and cache. On subsequent requests, serve from cache.
   if (url.includes('firebasestorage.googleapis.com')) {
     event.respondWith(
       caches.match(request).then(cached => {
         if (cached) return cached;
         return fetch(request).then(res => {
-          // Only cache successful, non-partial responses
           if (res.ok && res.status === 200) {
             caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
           }
