@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v8';
+const CACHE_NAME = 'little-linguist-v9';
 
 // Local files to pre-cache on install. The heavy libraries are now self-hosted
 // under vendor/ so the app no longer depends on any third-party CDN and works
@@ -13,9 +13,14 @@ const LOCAL_ASSETS = [
   '/Gungbe-Yor/vendor/react-dom.production.min.js',
   '/Gungbe-Yor/vendor/babel.min.js',
   '/Gungbe-Yor/vendor/confetti.browser.min.js',
-  '/Gungbe-Yor/vendor/firebase-app-compat.js',
-  '/Gungbe-Yor/vendor/firebase-firestore-compat.js',
-  '/Gungbe-Yor/vendor/firebase-storage-compat.js',
+];
+
+// Firebase compat SDK is loaded from gstatic (browser-ready build). Precache it
+// best-effort so the app still works offline after the first successful load.
+const CDN_ASSETS = [
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js',
 ];
 
 // -- Install: pre-cache everything ------------------------------------------
@@ -26,6 +31,13 @@ self.addEventListener('install', (event) => {
     await Promise.allSettled(
       LOCAL_ASSETS.map(url =>
         fetch(url, { cache: 'reload' })
+          .then(res => { if (res.ok) return cache.put(url, res); })
+          .catch(() => {})
+      )
+    );
+    await Promise.allSettled(
+      CDN_ASSETS.map(url =>
+        fetch(url)
           .then(res => { if (res.ok) return cache.put(url, res); })
           .catch(() => {})
       )
@@ -57,6 +69,20 @@ self.addEventListener('fetch', (event) => {
   // Self-hosted vendor libraries: cache-first (versioned, won't change between
   // deploys; a new library version ships as a new file or a cache bump)
   if (url.includes('/vendor/')) {
+    event.respondWith(
+      caches.match(request).then(cached => {
+        if (cached) return cached;
+        return fetch(request).then(res => {
+          if (res.ok) caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
+          return res;
+        }).catch(() => caches.match(request));
+      })
+    );
+    return;
+  }
+
+  // gstatic Firebase SDK: cache-first (versioned, immutable)
+  if (url.indexOf('gstatic.com/firebasejs/') !== -1) {
     event.respondWith(
       caches.match(request).then(cached => {
         if (cached) return cached;
