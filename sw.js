@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v10';
+const CACHE_NAME = 'little-linguist-v11';
 
 // Local app files to pre-cache on install.
 const LOCAL_ASSETS = [
@@ -15,7 +15,7 @@ const LOCAL_ASSETS = [
 const CDN_ASSETS = [
   'https://unpkg.com/react@18/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js',
+  'https://unpkg.com/@babel/standalone@7.24.7/babel.min.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
   'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js',
