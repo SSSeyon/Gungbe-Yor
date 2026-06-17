@@ -855,17 +855,21 @@
                 const data = html.slice(i * STORY_CHUNK_SIZE, (i + 1) * STORY_CHUNK_SIZE);
                 await db.collection('story_chunks').doc(story.id + '_' + i).set({ storyId: story.id, index: i, data }, { merge: true });
             }
-            const meta = { id: story.id, title: story.title, pageCount: story.pageCount || 0, author: story.author || '', lang: story.lang || null, chunkCount, updatedAt: Date.now() };
+            const updatedAt = Date.now();
+            const meta = { id: story.id, title: story.title, pageCount: story.pageCount || 0, author: story.author || '', lang: story.lang || null, chunkCount, updatedAt };
             await db.collection('story_links').doc(story.id).set(meta, { merge: true });
+            return updatedAt;
         };
 
         // Update only a story's metadata (title / language) - no chunk re-upload
         const fsUpdateStoryMeta = async (story) => {
-            if (!db) return;
+            if (!db) return null;
             const docRef = db.collection('story_links').doc(story.id);
             const snap = await docRef.get();
-            if (!snap.exists) return; // never synced - nothing to update remotely
-            await docRef.set({ title: story.title, lang: story.lang || null, updatedAt: Date.now() }, { merge: true });
+            if (!snap.exists) return null; // never synced - nothing to update remotely
+            const updatedAt = Date.now();
+            await docRef.set({ title: story.title, lang: story.lang || null, updatedAt }, { merge: true });
+            return updatedAt;
         };
 
         const fsLoadStoryLinks = async () => {
@@ -902,23 +906,43 @@
             await db.collection('story_links').doc(id).delete();
         };
 
-        // Pull any remote stories this device does not have yet into IndexedDB.
+        // Reconcile this device's stories with the cloud:
+        //  - pull stories it does not have yet
+        //  - re-pull stories whose remote copy is newer than the local one (edits)
+        //  - remove local stories whose remote link has been deleted (deletes),
+        //    but only if they were previously synced (so local-only drafts survive)
         // Returns { changed, links } so callers can refresh their lists.
         const mergeRemoteStories = async () => {
             const links = await fsLoadStoryLinks();
             const local = await dbLoadStories();
-            const localIds = new Set(local.map(s => s.id));
+            const localById = new Map(local.map(s => [s.id, s]));
+            const remoteIds = new Set(links.map(l => l.id));
             let changed = false;
+
             for (const link of links) {
-                if (localIds.has(link.id)) continue;
-                try {
-                    const fetchedHtml = await fsFetchStoryHtml(link);
-                    await dbSaveStory({ id: link.id, title: link.title, pageCount: link.pageCount || 0, author: link.author || '', html: fetchedHtml, lang: link.lang || null });
-                    changed = true;
-                } catch (e) {
-                    console.warn('Could not download story ' + link.id + ':', e.message);
+                const existing = localById.get(link.id);
+                const remoteAt = link.updatedAt || 0;
+                const localAt = existing ? (existing.syncedAt || 0) : -1;
+                // Download when missing, or when the remote copy is newer than what we synced
+                if (!existing || remoteAt > localAt) {
+                    try {
+                        const fetchedHtml = await fsFetchStoryHtml(link);
+                        await dbSaveStory({ id: link.id, title: link.title, pageCount: link.pageCount || 0, author: link.author || '', html: fetchedHtml, lang: link.lang || null, syncedAt: remoteAt });
+                        changed = true;
+                    } catch (e) {
+                        console.warn('Could not download story ' + link.id + ':', e.message);
+                    }
                 }
             }
+
+            // Remote-deletion: a story we previously synced is no longer in the cloud
+            for (const s of local) {
+                if (!remoteIds.has(s.id) && s.syncedAt) {
+                    try { await dbDeleteStory(s.id); changed = true; }
+                    catch (e) { console.warn('Could not remove deleted story ' + s.id + ':', e.message); }
+                }
+            }
+
             return { changed, links };
         };
 
@@ -1544,7 +1568,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.5.9</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1618,6 +1642,15 @@
             const [exporting, setExporting] = useState(false);
             const fileInputRef = useRef(null);
 
+            // Reflect the "word changes need exporting to reach other devices" flag.
+            const [wordsDirty, setWordsDirty] = useState(false);
+            useEffect(() => {
+                const read = () => { try { setWordsDirty(localStorage.getItem('ll_words_dirty') === '1'); } catch (e) {} };
+                read();
+                const t = setInterval(read, 1500);
+                return () => clearInterval(t);
+            }, []);
+
             const categories = ['All', ...CATEGORIES];
 
             const handleAddWord = () => {
@@ -1625,6 +1658,7 @@
                 const id = Date.now().toString();
                 setWords([{ ...newWord, id }, ...words]);
                 setNewWord({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
+                try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
             };
 
             const startEdit = (word) => { 
@@ -1637,6 +1671,7 @@
                 setWords(words.map(w => w.id === editingId ? editForm : w));
                 setEditingId(null);
                 setEditForm(null);
+                try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
             };
 
             const cancelEdit = () => {
@@ -1652,6 +1687,7 @@
             const confirmDelete = (id) => {
                 setWords(words.filter(w => w.id !== id));
                 setDeleteConfirmationId(null);
+                try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
             };
 
             const cancelDelete = () => {
@@ -1692,6 +1728,7 @@
                     const vUrl = URL.createObjectURL(vBlob);
                     const vA = document.createElement('a');
                     vA.href = vUrl; vA.download = 'version.json'; vA.click();
+                    try { localStorage.removeItem('ll_words_dirty'); } catch (e) {}
                 } catch (e) { alert('Export failed: ' + e.message); }
                 setExporting(false);
             };
@@ -1794,6 +1831,12 @@
                             <LibraryStats words={words} />
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
                                 <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
+                                {wordsDirty && (
+                                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                                        <p className="text-xs font-bold text-amber-700" style={{ fontFamily: 'sans-serif' }}>You have word changes that are only on this device.</p>
+                                        <p className="text-xs text-amber-600 mt-1" style={{ fontFamily: 'sans-serif' }}>To send them to your other devices: tap "Export Words w/ Audio" below, then upload the new words.json and version.json to GitHub. Other devices will be prompted to update on next launch.</p>
+                                    </div>
+                                )}
                                 <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg">
                                     <span className="text-sm font-bold text-gray-500">Data Pack Version</span>
                                     <span className="text-sm font-black text-blue-600">{localVersion === 'none' ? 'No pack installed' : 'v' + localVersion}</span>
@@ -2949,6 +2992,7 @@
             const containerRef = useRef(null);
             const autoReadRef = useRef(false);
             const turnTimer = useRef(null);
+            const audioRef = useRef(null);
 
             // Enter fullscreen + landscape on mount, restore on exit (same as the video player)
             useEffect(() => {
@@ -2977,7 +3021,11 @@
                 };
             }, [story.id]);
 
-            const stopAuto = () => { autoReadRef.current = false; setAutoRead(false); };
+            const stopAuto = () => {
+                autoReadRef.current = false;
+                setAutoRead(false);
+                try { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } } catch (e) { /* noop */ }
+            };
 
             // Exit fullscreen first, then run the supplied handler, so leaving the
             // reader returns cleanly without a stranded locked orientation
@@ -3005,6 +3053,23 @@
 
             const pageSpeakText = (p) => (p ? (p.speak || (p.text || '').replace(/\*/g, '')) : '');
 
+            // Play a page's narration: recorded audio if present, else text-to-speech.
+            // onDone fires when playback finishes (or immediately if nothing to play).
+            const playPage = (p, onDone) => {
+                // stop any prior playback
+                try { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } } catch (e) { /* noop */ }
+                if (p && p.audio) {
+                    try {
+                        const a = new Audio(p.audio);
+                        audioRef.current = a;
+                        if (onDone) { a.onended = onDone; a.onerror = onDone; }
+                        a.play().catch(() => { if (onDone) onDone(); });
+                        return;
+                    } catch (e) { /* fall through to TTS */ }
+                }
+                speak(pageSpeakText(p), onDone);
+            };
+
             // Turn to an adjacent page with the page-curl animation
             const go = (dir, after) => {
                 if (turning) return;
@@ -3021,8 +3086,7 @@
             // Auto-read: read current page, then turn and continue until the last page
             const readFromIndex = (i) => {
                 if (!autoReadRef.current) return;
-                const txt = pageSpeakText(pages[i]);
-                speak(txt, () => {
+                playPage(pages[i], () => {
                     if (!autoReadRef.current) return;
                     if (i >= pages.length - 1) { stopAuto(); return; }
                     go('next', () => readFromIndex(i + 1));
@@ -3039,6 +3103,7 @@
             useEffect(() => () => {
                 autoReadRef.current = false;
                 if (turnTimer.current) clearTimeout(turnTimer.current);
+                try { if (audioRef.current) audioRef.current.pause(); } catch (e) { /* noop */ }
                 if ('speechSynthesis' in window) window.speechSynthesis.cancel();
             }, []);
 
@@ -3178,7 +3243,7 @@
                 setPages(pages.map((p, idx) => idx === i ? { ...p, [field]: value } : p));
             };
 
-            const addPage = () => setPages([...pages, { text: '', translation: '', image: '' }]);
+            const addPage = () => setPages([...pages, { text: '', translation: '', image: '', audio: '' }]);
             const removePage = (i) => { if (pages.length > 1) setPages(pages.filter((_, idx) => idx !== i)); };
             const movePage = (i, dir) => {
                 const j = dir === 'up' ? i - 1 : i + 1;
@@ -3212,6 +3277,51 @@
             };
             const handleImageFile = (i, file) => processImage(file, (dataUrl) => updatePage(i, 'image', dataUrl));
             const handleCoverFile = (file) => processImage(file, (dataUrl) => setCover(dataUrl));
+
+            // Per-page voice recording. Records via MediaRecorder, stores the clip as a
+            // base64 data URL on the page's `audio` field so it syncs with the story.
+            const [recordingIdx, setRecordingIdx] = useState(null);
+            const mediaRec = useRef(null);
+            const mediaChunks = useRef([]);
+            const mediaStream = useRef(null);
+
+            const startRecording = async (i) => {
+                if (recordingIdx !== null) return;
+                if (!navigator.mediaDevices || !window.MediaRecorder) {
+                    showMsg('Recording is not supported on this device or browser.', true);
+                    return;
+                }
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaStream.current = stream;
+                    mediaChunks.current = [];
+                    const rec = new MediaRecorder(stream);
+                    rec.ondataavailable = (e) => { if (e.data && e.data.size) mediaChunks.current.push(e.data); };
+                    rec.onstop = () => {
+                        const blob = new Blob(mediaChunks.current, { type: rec.mimeType || 'audio/webm' });
+                        const reader = new FileReader();
+                        reader.onload = () => updatePage(i, 'audio', reader.result);
+                        reader.readAsDataURL(blob);
+                        if (mediaStream.current) { mediaStream.current.getTracks().forEach(t => t.stop()); mediaStream.current = null; }
+                    };
+                    mediaRec.current = rec;
+                    rec.start();
+                    setRecordingIdx(i);
+                } catch (e) {
+                    showMsg('Could not start recording: ' + e.message, true);
+                }
+            };
+            const stopRecording = () => {
+                try { if (mediaRec.current && mediaRec.current.state !== 'inactive') mediaRec.current.stop(); }
+                catch (e) { /* noop */ }
+                setRecordingIdx(null);
+            };
+            const playPageAudio = (src) => {
+                try { const a = new Audio(src); a.play().catch(() => {}); } catch (e) { /* noop */ }
+            };
+            useEffect(() => () => {
+                if (mediaStream.current) mediaStream.current.getTracks().forEach(t => t.stop());
+            }, []);
 
             // Measure the real serialised payload (what actually gets synced),
             // not just raw image bytes, so the guard matches the 4.5MB sync limit.
@@ -3327,6 +3437,34 @@
                                     placeholder="English translation (shown in italics)"
                                     className="w-full p-2 rounded-lg border border-gray-200 text-sm" style={{ fontFamily: 'sans-serif' }} />
                             )}
+
+                            <div className="bg-gray-50 rounded-lg p-2">
+                                <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2">Page voice</p>
+                                <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+                                    {recordingIdx === i ? (
+                                        <button onClick={stopRecording}
+                                            className="bg-red-500 text-white px-3 py-2 rounded-lg text-xs font-bold" style={{ fontFamily: 'sans-serif' }}>
+                                            ⏹ Stop recording
+                                        </button>
+                                    ) : (
+                                        <button onClick={() => startRecording(i)} disabled={recordingIdx !== null}
+                                            className="bg-purple-100 text-purple-700 px-3 py-2 rounded-lg text-xs font-bold" style={{ fontFamily: 'sans-serif', opacity: recordingIdx !== null ? 0.5 : 1 }}>
+                                            🎙 {p.audio ? 'Re-record' : 'Record voice'}
+                                        </button>
+                                    )}
+                                    {p.audio ? (
+                                        <button onClick={() => playPageAudio(p.audio)}
+                                            className="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg text-xs font-bold" style={{ fontFamily: 'sans-serif' }}>▶ Play</button>
+                                    ) : null}
+                                    {p.audio ? (
+                                        <button onClick={() => updatePage(i, 'audio', '')}
+                                            className="bg-red-50 text-red-400 px-3 py-2 rounded-lg text-xs font-bold" style={{ fontFamily: 'sans-serif' }}>Remove</button>
+                                    ) : null}
+                                    <span className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>
+                                        {recordingIdx === i ? 'Recording...' : (p.audio ? 'Recorded ✓' : 'Falls back to text-to-speech')}
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     ))}
 
@@ -3707,7 +3845,8 @@
                         await refresh();
                         let syncNote = '';
                         try {
-                            await fsSaveStoryLink(story);
+                            const updatedAt = await fsSaveStoryLink(story);
+                            await dbSaveStory({ ...story, syncedAt: updatedAt });
                             syncNote = ' Synced to all devices.';
                             await refresh();
                         } catch (se) {
@@ -3913,7 +4052,10 @@
                 }
                 let syncNote = '';
                 try {
-                    await fsSaveStoryLink(story);
+                    const updatedAt = await fsSaveStoryLink(story);
+                    // Record the synced timestamp locally so other devices see this as the
+                    // newest version, and so this device does not re-download its own edit.
+                    await dbSaveStory({ ...story, syncedAt: updatedAt });
                     syncNote = ' Synced to all devices.';
                 } catch (se) {
                     syncNote = ' (Saved on this device only: ' + se.message + ')';
@@ -3933,7 +4075,8 @@
                 if (!full) { showMsg('Could not find that story to copy.', true); return; }
                 const newId = (isStudioStory(full) ? 'studio_' : 'story_') + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
                 const flipped = full.lang === 'gungbe' ? 'yoruba' : (full.lang === 'yoruba' ? 'gungbe' : full.lang);
-                const copy = { ...full, id: newId, title: (full.title || 'Story') + ' (copy)', lang: flipped };
+                const copy = { ...full, id: newId, title: (full.title || 'Story') + ' (copy)', lang: flipped, syncedAt: undefined };
+                delete copy.syncedAt;
                 await dbSaveStory(copy);
                 await refresh();
                 const langWord = flipped === 'gungbe' ? 'Gungbe' : (flipped === 'yoruba' ? 'Yoruba' : 'both languages');
@@ -3954,7 +4097,10 @@
                 if (!full) { setEditingStory(null); return; }
                 const updated = { ...full, title: editingStory.title.trim(), lang: editingStory.lang };
                 await dbSaveStory(updated);
-                try { await fsUpdateStoryMeta(updated); } catch (e) { /* metadata sync failed - saved locally */ }
+                try {
+                    const updatedAt = await fsUpdateStoryMeta(updated);
+                    if (updatedAt) await dbSaveStory({ ...updated, syncedAt: updatedAt });
+                } catch (e) { /* metadata sync failed - saved locally */ }
                 setEditingStory(null);
                 await refresh();
                 showMsg('Story updated.');
@@ -3965,7 +4111,8 @@
                 setBusy(true);
                 showMsg('Syncing "' + story.title + '" to all devices...');
                 try {
-                    await fsSaveStoryLink(story);
+                    const updatedAt = await fsSaveStoryLink(story);
+                    await dbSaveStory({ ...story, syncedAt: updatedAt });
                     await refresh();
                     showMsg('"' + story.title + '" is now available on all devices!');
                 } catch (e) {
