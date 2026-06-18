@@ -1217,6 +1217,11 @@
 
         const REMOTE_WORDS_URL = 'https://ssseyon.github.io/Gungbe-Yor/words.json';
         const REMOTE_VERSION_URL = 'https://ssseyon.github.io/Gungbe-Yor/version.json';
+        // App (code) version. Bump this on every index.html change. The matching
+        // app.json on GitHub Pages holds the same number; launch compares them so a
+        // device can be prompted to reload when a newer app is published.
+        const APP_VERSION = '2.6.8';
+        const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
         const isNewer = (a, b) => {
@@ -1275,6 +1280,7 @@
             const [stats, setStats] = useState({ correct: 0, incorrect: 0, categories: {} });
             const [settings, setSettings] = useState({ autoPlayAudio: true, flashcardFront: 'english' });
             const [updateAvailable, setUpdateAvailable] = useState(null);
+            const [appUpdate, setAppUpdate] = useState(null); // newer app (code) version available
             const [updateLoading, setUpdateLoading] = useState(false);
             const [downloadProgress, setDownloadProgress] = useState(0);
             const [updateError, setUpdateError] = useState('');
@@ -1356,7 +1362,7 @@
                     setMode(savedMode);
                 }
 
-                // Check for remote update on every launch using tiny version.json only
+                // Check for remote DATA PACK update on every launch using tiny version.json
                 const storedVersion = localStorage.getItem('ll_words_version');
                 const localVer = storedVersion || '0.0.0';
                 setLocalVersion(storedVersion || 'none');
@@ -1365,6 +1371,18 @@
                     .then(remote => {
                         if (remote.version && isNewer(localVer, remote.version)) {
                             setUpdateAvailable(remote.version); // just store the version string, not the full data
+                        }
+                    })
+                    .catch(() => {});
+
+                // Check for remote APP (code) update on every launch using tiny app.json.
+                // Compares the running APP_VERSION against the published one; if newer,
+                // we prompt the user to reload (which fetches the new index.html + assets).
+                fetch(REMOTE_APP_URL + '?t=' + Date.now(), { cache: 'no-store' })
+                    .then(r => r.json())
+                    .then(remote => {
+                        if (remote && remote.version && isNewer(APP_VERSION, remote.version)) {
+                            setAppUpdate(remote.version);
                         }
                     })
                     .catch(() => {});
@@ -1472,6 +1490,25 @@
                 await fetchAndApplyPack({ force: false });
             };
 
+            // Reload to pick up a newer app (code) version. Clear caches and
+            // unregister the service worker first so the browser fetches the fresh
+            // index.html and assets instead of serving the cached old build.
+            const applyAppUpdate = async () => {
+                try {
+                    if (window.caches && caches.keys) {
+                        const names = await caches.keys();
+                        await Promise.all(names.map(n => caches.delete(n)));
+                    }
+                } catch (e) {}
+                try {
+                    if ('serviceWorker' in navigator) {
+                        const regs = await navigator.serviceWorker.getRegistrations();
+                        await Promise.all(regs.map(r => r.unregister()));
+                    }
+                } catch (e) {}
+                window.location.reload(true);
+            };
+
             // Exposed to Parent Zone so the exporting device (whose version already
             // matches remote and therefore never gets the banner) can still re-pull.
             const forcePull = async () => fetchAndApplyPack({ force: true });
@@ -1548,8 +1585,19 @@
             return (
                 <div className="min-h-screen relative font-sans text-gray-800">
                     <Background theme={theme} />
+                    {appUpdate && (
+                        <div className="fixed top-0 left-0 right-0 z-50 bg-indigo-600 text-white px-4 py-2 shadow-md">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-bold text-sm">🚀 New app version available (v{appUpdate})</span>
+                                <button onClick={applyAppUpdate}
+                                    className="bg-white text-indigo-700 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-indigo-100 transition-colors shrink-0">
+                                    Reload
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     {updateAvailable && (
-                        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-400 text-yellow-900 px-4 py-2 shadow-md">
+                        <div className="fixed left-0 right-0 z-40 bg-yellow-400 text-yellow-900 px-4 py-2 shadow-md" style={{ top: appUpdate ? '2.75rem' : 0 }}>
                             <div className="flex items-center justify-between gap-3">
                                 <span className="font-bold text-sm">📦 New word pack available (v{updateAvailable})</span>
                                 <button onClick={applyUpdate} disabled={updateLoading}
@@ -1570,7 +1618,7 @@
                             <button onClick={() => setUpdateError('')} className="bg-white/20 px-3 py-1 rounded-full shrink-0">Dismiss</button>
                         </div>
                     )}
-                    <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
+                    <div className="relative z-10 pb-8" style={{ paddingTop: (appUpdate && updateAvailable) ? '6.5rem' : (appUpdate || updateAvailable) ? '3.5rem' : 0 }}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
                         {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
@@ -1658,7 +1706,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.7</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.8</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1834,19 +1882,32 @@
                     // any other device: on next launch it sees the newer remote version,
                     // gets the prompt, and its Data Pack Version updates after it pulls.
 
+                    // Helper: trigger a download reliably. Mobile browsers (Safari and
+                    // Chrome on Android) silently drop a SECOND synchronous anchor click,
+                    // so the two files must be downloaded one at a time with a gap between
+                    // them, and the object URL appended to the DOM then revoked after use.
+                    const triggerDownload = (obj, filename) => {
+                        const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
+                        const dlUrl = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = dlUrl; a.download = filename;
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(dlUrl); }, 4000);
+                    };
+                    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
                     // Download words.json (stamped with the new, published version)
                     const backupData = { words, audio: audioWithHashes, version: newVersion, timestamp: new Date().toISOString() };
-                    const blob = new Blob([JSON.stringify(backupData)], {type: 'application/json'});
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url; a.download = 'words.json'; a.click();
+                    triggerDownload(backupData, 'words.json');
+
+                    // Wait before the second download so mobile browsers do not block it
+                    await wait(1200);
 
                     // Download version.json
                     const versionData = { version: newVersion, timestamp: new Date().toISOString() };
-                    const vBlob = new Blob([JSON.stringify(versionData)], {type: 'application/json'});
-                    const vUrl = URL.createObjectURL(vBlob);
-                    const vA = document.createElement('a');
-                    vA.href = vUrl; vA.download = 'version.json'; vA.click();
+                    triggerDownload(versionData, 'version.json');
                     try { localStorage.removeItem('ll_words_dirty'); } catch (e) {}
                 } catch (e) { alert('Export failed: ' + e.message); }
                 setExporting(false);
@@ -1956,6 +2017,10 @@
                                         <p className="text-xs text-amber-600 mt-1" style={{ fontFamily: 'sans-serif' }}>To send them to your other devices: tap "Export Words + Audio" below, then upload the new words.json and version.json to GitHub. Other devices will be prompted to update on next launch.</p>
                                     </div>
                                 )}
+                                <div className="flex items-center justify-between mb-2 bg-gray-50 px-3 py-2 rounded-lg">
+                                    <span className="text-sm font-bold text-gray-500">App Version</span>
+                                    <span className="text-sm font-black text-indigo-600">v{APP_VERSION}</span>
+                                </div>
                                 <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg">
                                     <span className="text-sm font-bold text-gray-500">Data Pack Version</span>
                                     <span className="text-sm font-black text-blue-600">{localVersion === 'none' ? 'No pack installed' : 'v' + localVersion}</span>
