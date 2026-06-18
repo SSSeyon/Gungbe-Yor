@@ -1100,22 +1100,21 @@
             return new Promise((resolve, reject) => {
                 const transaction = db.transaction([STORE_NAME], 'readonly');
                 const store = transaction.objectStore(STORE_NAME);
-                const request = store.getAllKeys();
-                request.onsuccess = async () => {
-                    const keys = request.result;
-                    if (keys.length === 0) resolve({});
+                const keysReq = store.getAllKeys();
+                const valsReq = store.getAll();
+                let keys = [];
+                let vals = [];
+                keysReq.onsuccess = () => { keys = keysReq.result || []; };
+                valsReq.onsuccess = () => { vals = valsReq.result || []; };
+                transaction.oncomplete = () => {
                     const entries = {};
-                    let processed = 0;
-                    for (const key of keys) {
-                        const blobReq = store.get(key);
-                        blobReq.onsuccess = (e) => {
-                            entries[key] = e.target.result;
-                            processed++;
-                            if (processed === keys.length) resolve(entries);
-                        }
+                    for (let i = 0; i < keys.length; i++) {
+                        entries[keys[i]] = vals[i];
                     }
+                    resolve(entries);
                 };
-                request.onerror = reject;
+                transaction.onerror = (e) => reject(e.target.error);
+                transaction.onabort = (e) => reject(e.target.error);
             });
         };
 
@@ -1568,7 +1567,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.1</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.2</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1834,7 +1833,7 @@
                                 {wordsDirty && (
                                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
                                         <p className="text-xs font-bold text-amber-700" style={{ fontFamily: 'sans-serif' }}>You have word changes that are only on this device.</p>
-                                        <p className="text-xs text-amber-600 mt-1" style={{ fontFamily: 'sans-serif' }}>To send them to your other devices: tap "Export Words w/ Audio" below, then upload the new words.json and version.json to GitHub. Other devices will be prompted to update on next launch.</p>
+                                        <p className="text-xs text-amber-600 mt-1" style={{ fontFamily: 'sans-serif' }}>To send them to your other devices: tap "Export Words + Audio" below, then upload the new words.json and version.json to GitHub. Other devices will be prompted to update on next launch.</p>
                                     </div>
                                 )}
                                 <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg">
@@ -1842,12 +1841,12 @@
                                     <span className="text-sm font-black text-blue-600">{localVersion === 'none' ? 'No pack installed' : 'v' + localVersion}</span>
                                 </div>
                                 <div className="grid grid-cols-3 gap-2">
-                                    <button onClick={handleBackup} disabled={exporting} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Backup'}</button>
+                                    <button onClick={handleBackup} disabled={exporting} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Export Words + Audio'}</button>
                                     <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
                                     <button onClick={handleReset} className="bg-red-50 text-red-600 p-2 rounded-lg border border-red-100 font-bold hover:bg-red-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Reset</button>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2 mt-2">
-                                    <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'Export Words w/ Audio'}</button>
+                                    <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                     <button onClick={handleHardRefresh} className="bg-orange-50 text-orange-600 p-2 rounded-lg border border-orange-100 font-bold hover:bg-orange-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Hard Refresh</button>
                                 </div>
                             </div>
@@ -2189,6 +2188,7 @@
                 return (
                     <div className="p-4 max-w-4xl mx-auto animate-pop">
                         <div className="flex items-center gap-4 mb-6">
+                            <button onClick={() => { if (!stepBack()) goHome(); }} className="bg-white px-4 h-12 rounded-full shadow hover:bg-gray-50 text-gray-600 font-bold text-base flex items-center">← Back</button>
                             <button onClick={goHome} className="bg-white p-4 rounded-full shadow hover:bg-gray-50 text-gray-500 text-2xl">🏠</button>
                             <h2 className="text-3xl font-black text-gray-700">Pick a Topic!</h2>
                         </div>
@@ -2235,7 +2235,8 @@
 
         const StickerBook = ({ stickers, onBack, onHome }) => (
             <div className="p-4 max-w-4xl mx-auto animate-pop">
-                <div className="flex items-center gap-4 mb-6">
+                <div className="flex items-center gap-3 mb-6">
+                    <button onClick={onBack} className="bg-white px-4 h-12 rounded-full shadow text-gray-600 font-bold text-base flex items-center">← Back</button>
                     <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
                     <h2 className="text-3xl font-black text-gray-700">My Stickers! ⭐</h2>
                 </div>
@@ -2349,7 +2350,10 @@
                     {showStar && <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none text-[120px] animate-star">⭐</div>}
 
                     <div className="w-full max-w-sm flex justify-between items-center mb-4">
-                        <button onClick={onHome || onBack} className="bg-white/80 backdrop-blur p-3 rounded-full shadow text-gray-600 text-xl">🏠</button>
+                        <div className="flex items-center gap-2">
+                            <button onClick={onBack} className="bg-white/80 backdrop-blur px-4 h-11 rounded-full shadow text-gray-600 font-bold text-sm flex items-center">← Back</button>
+                            <button onClick={onHome || onBack} className="bg-white/80 backdrop-blur p-3 rounded-full shadow text-gray-600 text-xl">🏠</button>
+                        </div>
                         <span className="bg-white/80 backdrop-blur px-5 py-2 rounded-full font-black text-gray-600 shadow-sm text-lg">{index+1} / {words.length}</span>
                     </div>
 
@@ -2402,7 +2406,10 @@
             return (
                 <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 animate-pop">
                     <div className="w-full max-w-sm flex justify-between items-center mb-6">
-                        <button onClick={onHome || onBack} className="bg-white/80 p-3 rounded-full shadow text-xl">🏠</button>
+                        <div className="flex items-center gap-2">
+                            <button onClick={onBack} className="bg-white/80 px-4 h-11 rounded-full shadow text-gray-600 font-bold text-sm flex items-center">← Back</button>
+                            <button onClick={onHome || onBack} className="bg-white/80 p-3 rounded-full shadow text-xl">🏠</button>
+                        </div>
                         <span className="bg-white/80 px-5 py-2 rounded-full font-black text-gray-600 shadow-sm text-lg">{index+1} / {words.length}</span>
                     </div>
                     <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-10 flex flex-col items-center border-b-[14px] border-purple-200">
@@ -2544,7 +2551,10 @@
                          </div>
                      )}
                      <div className="w-full flex justify-between items-center mb-6">
-                         <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                         <div className="flex items-center gap-2">
+                             <button onClick={onBack} className="bg-white px-4 h-12 rounded-full shadow text-gray-600 font-bold text-base flex items-center">← Back</button>
+                             <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
+                         </div>
                          <div className="bg-white px-5 py-3 rounded-full font-black text-yellow-500 shadow-sm border-2 border-yellow-100 flex items-center gap-2 text-2xl">⭐ {score}</div>
                      </div>
                      <div className="text-center mb-6 w-full">
@@ -2977,7 +2987,7 @@
         };
 
         // ── STUDIO READER: native flip-book ──
-        const StudioReader = ({ story, onBack, onHome }) => {
+        const StudioReader = ({ story, words, playAudio, onBack, onHome }) => {
             const data = useMemo(() => unpackStudioStory(story), [story.id]);
             const pages = useMemo(() => {
                 const base = data.pages || [];
@@ -3061,6 +3071,36 @@
 
             const pageSpeakText = (p) => (p ? (p.speak || (p.text || '').replace(/\*/g, '')) : '');
 
+            // A tapped target-language word should play the PARENT'S RECORDED audio
+            // for that word when one exists (matched by spelling against the word DB),
+            // and only fall back to text-to-speech when there is no recording.
+            const wordLang = (data.lang === 'yoruba' || data.lang === 'gungbe') ? data.lang : null;
+            const speakWord = (rawWord) => {
+                try { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } } catch (e) { /* noop */ }
+                const cleaned = (rawWord || '').replace(/\*/g, '').trim();
+                if (wordLang && Array.isArray(words)) {
+                    const norm = (s) => (s || '').toString().trim().toLowerCase();
+                    const match = words.find(w => norm(w[wordLang]) === norm(cleaned));
+                    if (match) {
+                        // Prefer the parent's recorded audio; only speak via TTS if there
+                        // is genuinely no recording stored for this word + language.
+                        getAudioBlob(match.id + '_' + wordLang).then((blob) => {
+                            if (blob) {
+                                try {
+                                    const a = new Audio(URL.createObjectURL(blob));
+                                    audioRef.current = a;
+                                    a.play().catch(() => speak(cleaned));
+                                } catch (e) { speak(cleaned); }
+                            } else {
+                                speak(cleaned);
+                            }
+                        }).catch(() => speak(cleaned));
+                        return;
+                    }
+                }
+                speak(cleaned);
+            };
+
             // Play a page's narration: recorded audio if present, else text-to-speech.
             // onDone fires when playback finishes (or immediately if nothing to play).
             const playPage = (p, onDone) => {
@@ -3131,10 +3171,16 @@
             // pages: the image area and the caption area keep the same proportions
             // regardless of how much text a page has; long text scrolls inside its
             // panel rather than growing the card.
+            // In landscape the book is short and wide, so a 62/38 split leaves the
+            // illustration cramped while the caption keeps a large empty band. Give
+            // the image the larger share in landscape (images aid learning more than
+            // text); portrait keeps the original balance.
+            const imgFlex = landscape ? '0 0 74%' : '0 0 62%';
+            const capFlex = landscape ? '1 1 26%' : '1 1 38%';
             const Card = ({ p, animateImg }) => (
                 <div style={{ background: '#fffdf7', borderRadius: 22, overflow: 'hidden', boxShadow: '0 18px 45px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', height: '100%', border: '5px solid #fff' }}>
                     {/* Illustration: fixed share of the card height */}
-                    <div style={{ width: '100%', flex: '0 0 62%', minHeight: 0, background: p.image ? '#000' : 'linear-gradient(135deg,#a78bfa,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    <div style={{ width: '100%', flex: imgFlex, minHeight: 0, background: p.image ? '#000' : 'linear-gradient(135deg,#a78bfa,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                         {p.image ? (
                             <img src={p.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} className={animateImg ? 'll-kenburns' : ''} />
                         ) : (
@@ -3142,13 +3188,13 @@
                         )}
                     </div>
                     {/* Caption: fixed share of the card height; text scrolls within */}
-                    <div style={{ flex: '1 1 38%', minHeight: 0, background: 'linear-gradient(180deg,#fff7e6,#ffedd5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px 18px' }}>
+                    <div style={{ flex: capFlex, minHeight: 0, background: 'linear-gradient(180deg,#fff7e6,#ffedd5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px 18px' }}>
                         <div style={{ maxHeight: '100%', overflowY: 'auto', textAlign: 'center', width: '100%' }}>
                             {p.isCover ? (
                                 <p style={{ fontFamily: '"Comic Sans MS", "Chalkboard SE", "Baloo", ui-rounded, sans-serif', fontSize: 'clamp(20px, 4.5vh, 34px)', lineHeight: 1.25, color: '#7c3aed', fontWeight: 900, margin: 0 }}>{p.text}</p>
                             ) : (
                                 <p style={{ fontFamily: '"Comic Sans MS", "Chalkboard SE", "Baloo", ui-rounded, sans-serif', fontSize: 'clamp(17px, 3.4vh, 26px)', lineHeight: 1.3, color: '#5b3a1f', fontWeight: 800, margin: 0 }}>
-                                    <StudioText text={p.text} mode={data.mode} onSpeak={(t) => speak(t)} />
+                                    <StudioText text={p.text} mode={data.mode} onSpeak={(t) => speakWord(t)} />
                                 </p>
                             )}
                             {p.translation ? (
@@ -3184,7 +3230,7 @@
                     {/* Book stage: a single fixed-aspect leaf so the book is the same
                         size and shape on every page (text scrolls inside, never grows) */}
                     <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', perspective: 2000, padding: '0 12px 8px' }}>
-                        <div style={{ position: 'relative', width: '100%', maxWidth: 560, aspectRatio: '11 / 9', maxHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ position: 'relative', width: '100%', maxWidth: landscape ? 980 : 560, aspectRatio: landscape ? '16 / 10' : '11 / 9', maxHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             {!turning && (
                                 <div style={{ position: 'absolute', inset: 0 }}>
                                     <Card p={page} animateImg={true} />
@@ -3561,7 +3607,7 @@
 
             if (activeHtml) {
                 if (isStudioStory(activeHtml)) {
-                    return <StudioReader story={activeHtml} onBack={() => { setActiveHtml(null); refresh(); }} onHome={() => { setActiveHtml(null); if (onHome) onHome(); }} />;
+                    return <StudioReader story={activeHtml} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} onHome={() => { setActiveHtml(null); if (onHome) onHome(); }} />;
                 }
                 return <StoryViewer story={activeHtml} lang={lang} words={words} playAudio={playAudio} onBack={() => { setActiveHtml(null); refresh(); }} onHome={() => { setActiveHtml(null); if (onHome) onHome(); }} />;
             }
@@ -3572,7 +3618,8 @@
 
             return (
                 <div className="p-4 max-w-2xl mx-auto animate-pop">
-                    <div className="flex items-center gap-4 mb-5">
+                    <div className="flex items-center gap-3 mb-5">
+                        <button onClick={onBack} className="bg-white px-4 h-12 rounded-full shadow text-gray-600 font-bold text-base flex items-center hover:bg-gray-50">← Back</button>
                         <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 text-2xl">🏠</button>
                         <h2 className="text-3xl font-black text-gray-700">Story Time 📖</h2>
                     </div>
