@@ -1365,8 +1365,10 @@
                     .catch(() => {});
             }, []);
 
-            const applyUpdate = async () => {
-                if (!updateAvailable) return;
+            // Fetch the remote word pack and apply it. When force is true we ignore
+            // the version check and audio-hash skipping and rewrite everything, so a
+            // device can re-pull its own pack even when versions already match.
+            const fetchAndApplyPack = async ({ force = false } = {}) => {
                 setUpdateLoading(true);
                 try {
                     const res = await fetch(REMOTE_WORDS_URL + '?t=' + Date.now(), { cache: 'no-store' });
@@ -1387,7 +1389,8 @@
 
                         for (const [key, entry] of Object.entries(data.audio)) {
                             const remoteHash = entry.hash;
-                            if (remoteHash && storedHashes[key] === remoteHash) {
+                            // On a forced re-download, write every entry regardless of hash
+                            if (!force && remoteHash && storedHashes[key] === remoteHash) {
                                 unchanged++;
                                 continue; // skip — nothing changed
                             }
@@ -1395,7 +1398,7 @@
                             newHashes[key] = remoteHash || '';
                         }
 
-                        console.log('Audio: ' + Object.keys(toWrite).length + ' new/changed, ' + unchanged + ' skipped');
+                        console.log('Audio: ' + Object.keys(toWrite).length + ' new/changed, ' + unchanged + ' skipped' + (force ? ' (forced)' : ''));
 
                         if (Object.keys(toWrite).length > 0) {
                             await batchSaveAudio(toWrite);
@@ -1411,12 +1414,29 @@
                         localStorage.setItem('ll_audio_hashes', JSON.stringify(newHashes));
                     }
 
-                    localStorage.setItem('ll_words_version', updateAvailable);
-                    setLocalVersion(updateAvailable);
+                    const appliedVersion = data.version || updateAvailable;
+                    if (appliedVersion) {
+                        localStorage.setItem('ll_words_version', appliedVersion);
+                        setLocalVersion(appliedVersion);
+                    }
                     setUpdateAvailable(null);
-                } catch(e) { showMsg('Update failed: ' + e.message + '. Check your connection and try again.', true); }
-                setUpdateLoading(false);
+                    return { ok: true, version: appliedVersion, count: (data.words || []).length };
+                } catch (e) {
+                    if (showMsg) showMsg('Update failed: ' + e.message + '. Check your connection and try again.', true);
+                    return { ok: false, error: e.message };
+                } finally {
+                    setUpdateLoading(false);
+                }
             };
+
+            const applyUpdate = async () => {
+                if (!updateAvailable) return;
+                await fetchAndApplyPack({ force: false });
+            };
+
+            // Exposed to Parent Zone so the exporting device (whose version already
+            // matches remote and therefore never gets the banner) can still re-pull.
+            const forcePull = async () => fetchAndApplyPack({ force: true });
 
             useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
             useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
@@ -1481,7 +1501,7 @@
                     )}
                     <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} updateLoading={updateLoading} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -1567,7 +1587,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.2</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.3</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1627,8 +1647,9 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, onBack }) => {
+        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, updateLoading, onBack }) => {
             const [view, setView] = useState('words');
+            const [pullMsg, setPullMsg] = useState('');
             const [newWord, setNewWord] = useState({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
             
             // Inline editing state
@@ -1849,6 +1870,13 @@
                                     <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                     <button onClick={handleHardRefresh} className="bg-orange-50 text-orange-600 p-2 rounded-lg border border-orange-100 font-bold hover:bg-orange-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Hard Refresh</button>
                                 </div>
+                                {forcePull && (
+                                    <button onClick={async () => { setPullMsg(''); const r = await forcePull(); if (r && r.ok) { setPullMsg('Re-downloaded v' + (r.version || '?') + ' (' + r.count + ' words).'); } else { setPullMsg('Re-download failed. Check your connection.'); } }} disabled={updateLoading}
+                                        className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60">
+                                        <Icon name="Download" size={16}/> {updateLoading ? 'Re-downloading...' : 'Re-download word pack from GitHub'}
+                                    </button>
+                                )}
+                                {pullMsg && <p className="text-xs text-teal-600 font-bold mt-1 text-center">{pullMsg}</p>}
                             </div>
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
                                 <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Palette" className="text-purple-500" /> Theme</h2>
@@ -2144,7 +2172,7 @@
             // --- Main Menu ---
             if (view === 'menu') {
                 return (
-                    <div className="p-4 max-w-2xl mx-auto flex flex-col gap-6 animate-pop">
+                    <div className="p-4 max-w-2xl mx-auto flex flex-col gap-4 animate-pop">
                         <div className="flex items-center justify-between mb-2">
                             <button onClick={() => { if (!stepBack()) { setNavStack([]); setView('lang_pick'); } }} className="bg-white/80 px-3 py-2 rounded-full font-bold text-gray-700 shadow text-sm flex items-center gap-2">
                                 <img src={lang === 'gungbe' ? SATO_IMG : YORUBA_IMG} alt={lang}
@@ -2156,25 +2184,25 @@
                                 <span className="text-xs font-bold text-gray-400">{stickers.length} Stickers</span>
                             </button>
                         </div>
-                        <div className="grid grid-cols-1 gap-5">
-                            <button onClick={() => goForward('categories_learn')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
-                                <span className="text-8xl block mb-4 drop-shadow-md">📚</span>
-                                <span className={`text-3xl font-black ${theme.accentText}`}>Learn Words</span>
+                        <div className="grid grid-cols-1 gap-3">
+                            <button onClick={() => goForward('categories_learn')} className={`bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 ${theme.cardBorder}`}>
+                                <span className="text-5xl drop-shadow-md">📚</span>
+                                <span className={`text-2xl font-black ${theme.accentText}`}>Learn Words</span>
                             </button>
-                            <button onClick={() => goForward('categories_listen')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-purple-200">
-                                <span className="text-8xl block mb-4 drop-shadow-md">👂</span>
-                                <span className="text-3xl font-black text-purple-600">Listen & Repeat</span>
+                            <button onClick={() => goForward('categories_listen')} className="bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 border-purple-200">
+                                <span className="text-5xl drop-shadow-md">👂</span>
+                                <span className="text-2xl font-black text-purple-600">Listen & Repeat</span>
                             </button>
-                            <button onClick={() => goForward('categories_quiz')} className={`bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 ${theme.cardBorder}`}>
-                                <span className="text-8xl block mb-4 drop-shadow-md">🎮</span>
-                                <span className={`text-3xl font-black ${theme.accentText}`}>Play Game</span>
+                            <button onClick={() => goForward('categories_quiz')} className={`bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 ${theme.cardBorder}`}>
+                                <span className="text-5xl drop-shadow-md">🎮</span>
+                                <span className={`text-2xl font-black ${theme.accentText}`}>Play Game</span>
                             </button>
-                            <button onClick={() => goForward('stories')} className="bg-white p-8 rounded-[2rem] shadow-xl hover:shadow-2xl hover:-translate-y-1 transition-all text-center border-b-8 border-yellow-100">
-                                <span className="text-8xl block mb-4 drop-shadow-md">📖</span>
-                                <span className="text-3xl font-black text-yellow-500">Story Time</span>
+                            <button onClick={() => goForward('stories')} className="bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 border-yellow-100">
+                                <span className="text-5xl drop-shadow-md">📖</span>
+                                <span className="text-2xl font-black text-yellow-500">Story Time</span>
                             </button>
                         </div>
-                        <button onClick={goHome} className="text-gray-400 font-bold mt-4 self-center">← Back to Home</button>
+                        <button onClick={goHome} className="text-gray-400 font-bold mt-2 self-center">← Back to Home</button>
                     </div>
                 );
             }
@@ -2215,7 +2243,19 @@
                 );
             }
 
-            const gameWords = category === 'All' ? wordsWithAudio : wordsWithAudio.filter(w => w.category === category);
+            // Randomise the order of words for Learn and Listen so the sequence is
+            // not predictable. Memoised on category/activity/language so it shuffles
+            // once when the child enters an activity, not on every re-render (which
+            // would reshuffle on each card flip). Quiz randomises internally already.
+            const gameWords = useMemo(() => {
+                const base = category === 'All' ? wordsWithAudio : wordsWithAudio.filter(w => w.category === category);
+                const arr = base.slice();
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+                }
+                return arr;
+            }, [category, view, lang, words]);
 
             const noWordsMessage = (
                 <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center animate-pop">
@@ -3073,7 +3113,7 @@
 
             // A tapped target-language word should play the PARENT'S RECORDED audio
             // for that word when one exists (matched by spelling against the word DB),
-            // and only fall back to text-to-speech when there is no recording.
+            // falling back to text-to-speech only when there is no recording.
             const wordLang = (data.lang === 'yoruba' || data.lang === 'gungbe') ? data.lang : null;
             const speakWord = (rawWord) => {
                 try { if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } } catch (e) { /* noop */ }
@@ -3082,8 +3122,6 @@
                     const norm = (s) => (s || '').toString().trim().toLowerCase();
                     const match = words.find(w => norm(w[wordLang]) === norm(cleaned));
                     if (match) {
-                        // Prefer the parent's recorded audio; only speak via TTS if there
-                        // is genuinely no recording stored for this word + language.
                         getAudioBlob(match.id + '_' + wordLang).then((blob) => {
                             if (blob) {
                                 try {
