@@ -1220,7 +1220,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.6.10';
+        const APP_VERSION = '2.6.12';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
@@ -1284,6 +1284,7 @@
             const [updateLoading, setUpdateLoading] = useState(false);
             const [downloadProgress, setDownloadProgress] = useState(0);
             const [updateError, setUpdateError] = useState('');
+            const [updateSuccess, setUpdateSuccess] = useState('');
             const [localVersion, setLocalVersion] = useState('none');
 
             // Push a history entry each time mode changes away from landing
@@ -1362,30 +1363,11 @@
                     setMode(savedMode);
                 }
 
-                // Check for remote DATA PACK update on every launch using tiny version.json
+                // Show this device's installed data-pack version. The actual update
+                // checks (data pack + app) run in a dedicated effect below, on mount
+                // and every five minutes.
                 const storedVersion = localStorage.getItem('ll_words_version');
-                const localVer = storedVersion || '0.0.0';
                 setLocalVersion(storedVersion || 'none');
-                fetch(REMOTE_VERSION_URL + '?t=' + Date.now())
-                    .then(r => r.json())
-                    .then(remote => {
-                        if (remote.version && isNewer(localVer, remote.version)) {
-                            setUpdateAvailable(remote.version); // just store the version string, not the full data
-                        }
-                    })
-                    .catch(() => {});
-
-                // Check for remote APP (code) update on every launch using tiny app.json.
-                // Compares the running APP_VERSION against the published one; if newer,
-                // we prompt the user to reload (which fetches the new index.html + assets).
-                fetch(REMOTE_APP_URL + '?t=' + Date.now(), { cache: 'no-store' })
-                    .then(r => r.json())
-                    .then(remote => {
-                        if (remote && remote.version && isNewer(APP_VERSION, remote.version)) {
-                            setAppUpdate(remote.version);
-                        }
-                    })
-                    .catch(() => {});
             }, []);
 
             // Fetch the remote word pack and apply it. When force is true we ignore
@@ -1474,6 +1456,8 @@
                         setLocalVersion(appliedVersion);
                     }
                     setUpdateAvailable(null);
+                    setUpdateSuccess('Word pack updated to v' + (appliedVersion || '?') + '.');
+                    setTimeout(() => setUpdateSuccess(''), 4000);
                     return { ok: true, version: appliedVersion, count: (data.words || []).length };
                 } catch (e) {
                     console.error('Word pack update failed:', e);
@@ -1513,18 +1497,17 @@
             // matches remote and therefore never gets the banner) can still re-pull.
             const forcePull = async () => fetchAndApplyPack({ force: true });
 
-            // Manual, on-demand version check. Runs the SAME comparison as the launch
-            // detection but reports the outcome either way, so deployment can be
-            // verified without guessing. Returns the local + remote versions and
-            // whether an update is available; also raises the banner if one is.
-            const checkForUpdate = async () => {
+            // Check the DATA PACK version (version.json). Raises the yellow banner if a
+            // newer pack is published. Returns the local + remote versions and whether
+            // an update is available.
+            const checkDataPack = async () => {
                 const storedVersion = localStorage.getItem('ll_words_version') || '0.0.0';
                 try {
                     const r = await fetch(REMOTE_VERSION_URL + '?t=' + Date.now(), { cache: 'no-store' });
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     const remote = await r.json();
                     const remoteVersion = remote && remote.version ? remote.version : null;
-                    if (!remoteVersion) return { ok: false, error: 'No version.json found on GitHub yet.' };
+                    if (!remoteVersion) return { ok: false, error: 'No version.json on GitHub yet.' };
                     const available = isNewer(storedVersion, remoteVersion);
                     if (available) setUpdateAvailable(remoteVersion);
                     return { ok: true, available, local: storedVersion, remote: remoteVersion };
@@ -1532,6 +1515,52 @@
                     return { ok: false, error: e.message };
                 }
             };
+
+            // Check the APP (code) version (app.json). Raises the indigo banner if a
+            // newer app is published. Returns the local + remote versions and whether
+            // an update is available.
+            const checkApp = async () => {
+                try {
+                    const r = await fetch(REMOTE_APP_URL + '?t=' + Date.now(), { cache: 'no-store' });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const remote = await r.json();
+                    const remoteVersion = remote && remote.version ? remote.version : null;
+                    if (!remoteVersion) return { ok: false, error: 'No app.json on GitHub yet.' };
+                    const available = isNewer(APP_VERSION, remoteVersion);
+                    if (available) setAppUpdate(remoteVersion);
+                    return { ok: true, available, local: APP_VERSION, remote: remoteVersion };
+                } catch (e) {
+                    return { ok: false, error: e.message };
+                }
+            };
+
+            // Combined check used by the launch run, the 5-minute background timer, and
+            // the manual "Check for updates" button. Checks BOTH the app and the data
+            // pack, raising whichever banner is needed. Returns both results so the
+            // button can report both numbers.
+            const checkForUpdate = async () => {
+                const [app, pack] = await Promise.all([checkApp(), checkDataPack()]);
+                return { app, pack };
+            };
+
+            // Keep a ref to the latest checkForUpdate so the interval below (which must
+            // be set up once with a stable [] dependency list) always calls the current
+            // version without re-creating the timer on every render.
+            const checkForUpdateRef = useRef(checkForUpdate);
+            useEffect(() => { checkForUpdateRef.current = checkForUpdate; });
+
+            // Run the combined update check (app + data pack) on mount and then every
+            // five minutes in the background. Whichever is behind raises its banner.
+            // Also re-checks when the tab/app regains focus, so returning to the app
+            // after a while gets a fresh check without waiting for the timer.
+            useEffect(() => {
+                const run = () => { try { checkForUpdateRef.current(); } catch (e) {} };
+                run();
+                const id = setInterval(run, 5 * 60 * 1000);
+                const onVisible = () => { if (document.visibilityState === 'visible') run(); };
+                document.addEventListener('visibilitychange', onVisible);
+                return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
+            }, []);
 
             useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
             useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
@@ -1585,40 +1614,52 @@
             return (
                 <div className="min-h-screen relative font-sans text-gray-800">
                     <Background theme={theme} />
-                    {appUpdate && (
-                        <div className="fixed top-0 left-0 right-0 z-50 bg-indigo-600 text-white px-4 py-2 shadow-md">
-                            <div className="flex items-center justify-between gap-3">
-                                <span className="font-bold text-sm">🚀 New app version available (v{appUpdate})</span>
-                                <button onClick={applyAppUpdate}
-                                    className="bg-white text-indigo-700 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-indigo-100 transition-colors shrink-0">
-                                    Reload
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                    {updateAvailable && (
-                        <div className="fixed left-0 right-0 z-40 bg-yellow-400 text-yellow-900 px-4 py-2 shadow-md" style={{ top: appUpdate ? '2.75rem' : 0 }}>
-                            <div className="flex items-center justify-between gap-3">
-                                <span className="font-bold text-sm">📦 New word pack available (v{updateAvailable})</span>
-                                <button onClick={applyUpdate} disabled={updateLoading}
-                                    className="bg-yellow-900 text-yellow-100 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-yellow-800 transition-colors shrink-0 disabled:opacity-70">
-                                    {updateLoading ? (downloadProgress > 0 ? 'Downloading ' + downloadProgress + '%' : 'Starting...') : 'Update Now'}
-                                </button>
-                            </div>
-                            {updateLoading && (
-                                <div className="mt-1.5 h-2 w-full bg-yellow-900/20 rounded-full overflow-hidden">
-                                    <div className="h-full bg-yellow-900 transition-all duration-200" style={{ width: (downloadProgress || 3) + '%' }}></div>
+                    {(appUpdate || updateAvailable || (updateError && !updateLoading) || updateSuccess) && (
+                        <div className="fixed top-0 left-0 right-0 z-50 shadow-md">
+                            {appUpdate && (
+                                <div className="bg-indigo-600 text-white px-4 py-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="font-bold text-sm">🚀 New app version available (v{appUpdate})</span>
+                                        <button onClick={applyAppUpdate}
+                                            className="bg-white text-indigo-700 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-indigo-100 transition-colors shrink-0">
+                                            Reload
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            {updateAvailable && (
+                                <div className="bg-yellow-400 text-yellow-900 px-4 py-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="font-bold text-sm">📦 New word pack available (v{updateAvailable})</span>
+                                        <button onClick={applyUpdate} disabled={updateLoading}
+                                            className="bg-yellow-900 text-yellow-100 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-yellow-800 transition-colors shrink-0 disabled:opacity-70">
+                                            {updateLoading ? (downloadProgress > 0 ? 'Downloading ' + downloadProgress + '%' : 'Starting...') : 'Update Now'}
+                                        </button>
+                                    </div>
+                                    {updateLoading && (
+                                        <div className="mt-1.5 h-2 w-full bg-yellow-900/20 rounded-full overflow-hidden">
+                                            <div className="h-full bg-yellow-900 transition-all duration-200" style={{ width: (downloadProgress || 3) + '%' }}></div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {updateError && !updateLoading && (
+                                <div className="bg-red-500 text-white px-4 py-2 text-xs font-bold flex items-center justify-between gap-3">
+                                    <span>{updateError}</span>
+                                    <button onClick={() => setUpdateError('')} className="bg-white/20 px-3 py-1 rounded-full shrink-0">Dismiss</button>
+                                </div>
+                            )}
+                            {updateSuccess && (
+                                <div className="bg-green-600 text-white px-4 py-2 text-xs font-bold flex items-center justify-between gap-3">
+                                    <span>✅ {updateSuccess}</span>
+                                    <button onClick={() => setUpdateSuccess('')} className="bg-white/20 px-3 py-1 rounded-full shrink-0">OK</button>
                                 </div>
                             )}
                         </div>
                     )}
-                    {updateError && !updateLoading && (
-                        <div className="fixed top-0 left-0 right-0 z-50 bg-red-500 text-white px-4 py-2 text-xs font-bold flex items-center justify-between gap-3 shadow-md">
-                            <span>{updateError}</span>
-                            <button onClick={() => setUpdateError('')} className="bg-white/20 px-3 py-1 rounded-full shrink-0">Dismiss</button>
-                        </div>
-                    )}
-                    <div className="relative z-10 pb-8" style={{ paddingTop: (appUpdate && updateAvailable) ? '6.5rem' : (appUpdate || updateAvailable) ? '3.5rem' : 0 }}>
+                    <div className="relative z-10 pb-8" style={{ paddingTop: (
+                        (appUpdate ? 1 : 0) + (updateAvailable ? 1 : 0) + ((updateError && !updateLoading) ? 1 : 0) + (updateSuccess ? 1 : 0)
+                    ) * 2.75 + 'rem' }}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
                         {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
@@ -1706,7 +1747,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.10</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.12</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1781,6 +1822,7 @@
             const [filter, setFilter] = useState('All');
             const [searchTerm, setSearchTerm] = useState('');
             const [exporting, setExporting] = useState(false);
+            const [exportingVersion, setExportingVersion] = useState(false); // separate flag so the version.json button never shares disabled state with Export Words
             const [pendingVersion, setPendingVersion] = useState(null); // version stamped into the last words.json export, for the separate version.json button
             const fileInputRef = useRef(null);
 
@@ -1914,7 +1956,7 @@
             // files always agree. If the user taps this before ever exporting words this
             // session, fall back to computing the next version from the live remote pack.
             const handleExportVersion = async () => {
-                setExporting(true);
+                setExportingVersion(true);
                 try {
                     let v = pendingVersion;
                     if (!v) {
@@ -1941,7 +1983,7 @@
                     a.click();
                     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(dlUrl); }, 6000);
                 } catch (e) { alert('Export failed: ' + e.message); }
-                finally { setExporting(false); }
+                finally { setExportingVersion(false); }
             };
 
             const handleExportAudioOnly = async () => {
@@ -2064,14 +2106,34 @@
                                     <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
                                     <button onClick={handleReset} className="bg-red-50 text-red-600 p-2 rounded-lg border border-red-100 font-bold hover:bg-red-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Reset</button>
                                 </div>
-                                <button onClick={handleExportVersion} disabled={exporting} className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Export version.json (tap after Words + Audio)'}</button>
+                                <button onClick={handleExportVersion} disabled={exportingVersion} className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="FileJson" size={16}/> {exportingVersion ? '...' : 'Export version.json (tap after Words + Audio)'}</button>
                                 <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: 'sans-serif' }}>Mobile only lets one file download per tap. Tap "Export Words + Audio" first, then this button, then upload both files to GitHub.</p>
                                 <div className="grid grid-cols-2 gap-2 mt-2">
                                     <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                     <button onClick={handleHardRefresh} className="bg-orange-50 text-orange-600 p-2 rounded-lg border border-orange-100 font-bold hover:bg-orange-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Hard Refresh</button>
                                 </div>
                                 {checkForUpdate && (
-                                    <button onClick={async () => { setChecking(true); setCheckMsg(''); const r = await checkForUpdate(); setChecking(false); if (!r.ok) { setCheckMsg('Could not check: ' + r.error); } else if (r.available) { setCheckMsg('Update available! GitHub has v' + r.remote + ', this device has v' + r.local + '. Tap the yellow banner or "Re-download" below.'); } else { setCheckMsg('Up to date. This device has v' + r.local + ', GitHub has v' + r.remote + '.'); } }} disabled={checking}
+                                    <button onClick={async () => {
+                                        setChecking(true); setCheckMsg('');
+                                        const { app, pack } = await checkForUpdate();
+                                        setChecking(false);
+                                        const lines = [];
+                                        if (app.ok) {
+                                            lines.push(app.available
+                                                ? 'App: update available! GitHub v' + app.remote + ', this app v' + app.local + '. Tap the blue banner to reload.'
+                                                : 'App: up to date (v' + app.local + ').');
+                                        } else {
+                                            lines.push('App: could not check (' + app.error + ').');
+                                        }
+                                        if (pack.ok) {
+                                            lines.push(pack.available
+                                                ? 'Word pack: update available! GitHub v' + pack.remote + ', this device v' + pack.local + '. Tap the yellow banner or "Re-download" below.'
+                                                : 'Word pack: up to date (v' + pack.local + ').');
+                                        } else {
+                                            lines.push('Word pack: could not check (' + pack.error + ').');
+                                        }
+                                        setCheckMsg(lines.join(' '));
+                                    }} disabled={checking}
                                         className="w-full mt-2 bg-indigo-50 text-indigo-700 p-2 rounded-lg border border-indigo-100 font-bold hover:bg-indigo-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60">
                                         <Icon name="RotateCcw" size={16}/> {checking ? 'Checking...' : 'Check for updates'}
                                     </button>
