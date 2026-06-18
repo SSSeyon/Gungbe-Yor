@@ -1587,7 +1587,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.3</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.4</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1671,7 +1671,21 @@
                 return () => clearInterval(t);
             }, []);
 
-            const categories = ['All', ...CATEGORIES];
+            // Categories shown in Settings must match what the activities show, which
+            // come from the actual words in the database, not a fixed list. Build the
+            // set from the data (seeded with the common ones so the add/edit dropdowns
+            // are never empty), preserving seed order then appending any extras.
+            const dataCategories = useMemo(() => {
+                const present = new Set(words.map(w => w.category).filter(Boolean));
+                const ordered = CATEGORIES.filter(c => present.has(c));
+                const extras = [...present].filter(c => !CATEGORIES.includes(c)).sort();
+                const seedForDropdowns = CATEGORIES.filter(c => !present.has(c));
+                // For the add/edit dropdowns we want every option selectable, so union
+                // the seed list with whatever is actually in the data.
+                return { filter: ['All', ...ordered, ...extras], options: [...ordered, ...extras, ...seedForDropdowns] };
+            }, [words]);
+            const categories = dataCategories.filter;
+            const categoryOptions = dataCategories.options;
 
             const handleAddWord = () => {
                 if (!newWord.english) return;
@@ -1951,7 +1965,7 @@
                                 <input placeholder="English" value={newWord.english} onChange={e => setNewWord({...newWord, english: e.target.value})} className="p-2 rounded border w-full" />
                                 <input placeholder="Yoruba" value={newWord.yoruba} onChange={e => setNewWord({...newWord, yoruba: e.target.value})} className="p-2 rounded border w-full" />
                                 <input placeholder="Gungbe" value={newWord.gungbe} onChange={e => setNewWord({...newWord, gungbe: e.target.value})} className="p-2 rounded border w-full" />
-                                <select value={newWord.category} onChange={e => setNewWord({...newWord, category: e.target.value})} className="p-2 rounded border w-full">{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                                <select value={newWord.category} onChange={e => setNewWord({...newWord, category: e.target.value})} className="p-2 rounded border w-full">{categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}</select>
                                 <button onClick={handleAddWord} className="bg-green-500 text-white rounded font-bold p-2 hover:bg-green-600">Add</button>
                             </div>
                             <input type="text" placeholder="Search..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full p-2 border rounded-lg mb-2" />
@@ -1968,7 +1982,7 @@
                                                 <input value={editForm.english} onChange={e => setEditForm({...editForm, english: e.target.value})} className="p-2 rounded border" placeholder="English" />
                                                 <input value={editForm.yoruba} onChange={e => setEditForm({...editForm, yoruba: e.target.value})} className="p-2 rounded border" placeholder="Yoruba" />
                                                 <input value={editForm.gungbe} onChange={e => setEditForm({...editForm, gungbe: e.target.value})} className="p-2 rounded border" placeholder="Gungbe" />
-                                                <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} className="p-2 rounded border">{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                                                <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} className="p-2 rounded border">{categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}</select>
                                                 <div className="flex gap-1 justify-end">
                                                     <button onClick={saveEdit} className="bg-green-500 text-white p-2 rounded hover:bg-green-600"><Icon name="Save" size={16}/></button>
                                                     <button onClick={cancelEdit} className="bg-gray-400 text-white p-2 rounded hover:bg-gray-500"><Icon name="X" size={16}/></button>
@@ -2172,8 +2186,8 @@
             // --- Main Menu ---
             if (view === 'menu') {
                 return (
-                    <div className="p-4 max-w-2xl mx-auto flex flex-col gap-4 animate-pop">
-                        <div className="flex items-center justify-between mb-2">
+                    <div className="p-4 max-w-2xl mx-auto flex flex-col gap-3 animate-pop" style={{ minHeight: 'calc(100dvh - 2rem)' }}>
+                        <div className="flex items-center justify-between flex-shrink-0">
                             <button onClick={() => { if (!stepBack()) { setNavStack([]); setView('lang_pick'); } }} className="bg-white/80 px-3 py-2 rounded-full font-bold text-gray-700 shadow text-sm flex items-center gap-2">
                                 <img src={lang === 'gungbe' ? SATO_IMG : YORUBA_IMG} alt={lang}
                                     className="w-7 h-7 rounded-full object-cover" />
@@ -2184,25 +2198,25 @@
                                 <span className="text-xs font-bold text-gray-400">{stickers.length} Stickers</span>
                             </button>
                         </div>
-                        <div className="grid grid-cols-1 gap-3">
-                            <button onClick={() => goForward('categories_learn')} className={`bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 ${theme.cardBorder}`}>
+                        <div className="flex-1 min-h-0 flex flex-col gap-3">
+                            <button onClick={() => goForward('categories_learn')} className={`flex-1 min-h-[72px] bg-white px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 ${theme.cardBorder}`}>
                                 <span className="text-5xl drop-shadow-md">📚</span>
                                 <span className={`text-2xl font-black ${theme.accentText}`}>Learn Words</span>
                             </button>
-                            <button onClick={() => goForward('categories_listen')} className="bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 border-purple-200">
+                            <button onClick={() => goForward('categories_listen')} className="flex-1 min-h-[72px] bg-white px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 border-purple-200">
                                 <span className="text-5xl drop-shadow-md">👂</span>
                                 <span className="text-2xl font-black text-purple-600">Listen & Repeat</span>
                             </button>
-                            <button onClick={() => goForward('categories_quiz')} className={`bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 ${theme.cardBorder}`}>
+                            <button onClick={() => goForward('categories_quiz')} className={`flex-1 min-h-[72px] bg-white px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 ${theme.cardBorder}`}>
                                 <span className="text-5xl drop-shadow-md">🎮</span>
                                 <span className={`text-2xl font-black ${theme.accentText}`}>Play Game</span>
                             </button>
-                            <button onClick={() => goForward('stories')} className="bg-white py-4 px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 border-yellow-100">
+                            <button onClick={() => goForward('stories')} className="flex-1 min-h-[72px] bg-white px-6 rounded-3xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center gap-4 border-b-4 border-yellow-100">
                                 <span className="text-5xl drop-shadow-md">📖</span>
                                 <span className="text-2xl font-black text-yellow-500">Story Time</span>
                             </button>
                         </div>
-                        <button onClick={goHome} className="text-gray-400 font-bold mt-2 self-center">← Back to Home</button>
+                        <button onClick={goHome} className="text-gray-400 font-bold self-center flex-shrink-0">← Back to Home</button>
                     </div>
                 );
             }
