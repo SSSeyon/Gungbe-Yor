@@ -1189,9 +1189,21 @@
           });
         };
 
-        const base64ToBlob = async (base64Data) => {
-          const res = await fetch(base64Data);
-          return await res.blob();
+        const base64ToBlob = (base64Data) => {
+            // Fast path: decode with atob rather than routing through fetch(data:...).
+            // This avoids a full async fetch round-trip per entry, which is significant
+            // when converting hundreds of audio clips on a mobile device.
+            try {
+                const [header, b64] = base64Data.split(',');
+                const mime = (header.match(/:(.*?);/) || [])[1] || 'audio/webm';
+                const raw = atob(b64);
+                const bytes = new Uint8Array(raw.length);
+                for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+                return new Blob([bytes], { type: mime });
+            } catch (e) {
+                // Fallback for any malformed entry
+                return new Blob([], { type: 'audio/webm' });
+            }
         };
 
         // Generate a short hash of a base64 string for change detection
@@ -1201,18 +1213,32 @@
             return Array.from(new Uint8Array(buf)).slice(0, 6).map(b => b.toString(16).padStart(2,'0')).join('');
         };
 
-        // Write blobs to IndexedDB in parallel batches of 20
+        // Write all audio entries in ONE IndexedDB transaction. Opening a transaction
+        // per-write (the old pattern) was the primary slowness on mobile — each
+        // transaction has a fixed overhead. A single transaction removes that overhead
+        // entirely. Returns a map of key -> Blob so the caller can build object URLs
+        // without reading back from IndexedDB.
         const batchSaveAudio = async (entries) => {
             const keys = Object.keys(entries);
-            const BATCH = 20;
-            for (let i = 0; i < keys.length; i += BATCH) {
-                await Promise.all(
-                    keys.slice(i, i + BATCH).map(async (key) => {
-                        const blob = await base64ToBlob(entries[key].data);
-                        await saveAudioBlob(key, blob);
-                    })
-                );
+            if (keys.length === 0) return {};
+            const db = await initDB();
+            const blobs = {};
+            // Convert all base64 strings to blobs first (synchronous, no IDB yet)
+            for (const key of keys) {
+                blobs[key] = base64ToBlob(entries[key].data);
             }
+            // Write all blobs in a single readwrite transaction
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction([STORE_NAME], 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                for (const key of keys) {
+                    store.put(blobs[key], key);
+                }
+                tx.oncomplete = resolve;
+                tx.onerror = (e) => reject(e.target.error);
+                tx.onabort = (e) => reject(e.target.error);
+            });
+            return blobs;
         };
 
         const REMOTE_WORDS_URL = 'https://ssseyon.github.io/Gungbe-Yor/words.json';
@@ -1220,7 +1246,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.6.12';
+        const APP_VERSION = '2.6.13';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
@@ -1437,12 +1463,12 @@
                         console.log('Audio: ' + Object.keys(toWrite).length + ' new/changed, ' + unchanged + ' skipped' + (force ? ' (forced)' : ''));
 
                         if (Object.keys(toWrite).length > 0) {
-                            await batchSaveAudio(toWrite);
-                            // Refresh audio cache for updated keys only
+                            const writtenBlobs = await batchSaveAudio(toWrite);
+                            // Build object URLs from the blobs already in memory.
+                            // Never re-read from IndexedDB what was just written there.
                             const newCache = { ...audioCache };
-                            for (const key of Object.keys(toWrite)) {
-                                const blob = await getAudioBlob(key);
-                                if (blob) newCache[key] = URL.createObjectURL(blob);
+                            for (const key of Object.keys(writtenBlobs)) {
+                                newCache[key] = URL.createObjectURL(writtenBlobs[key]);
                             }
                             setAudioCache(newCache);
                         }
@@ -1747,7 +1773,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.12</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.13</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2024,14 +2050,15 @@
                         }
                         if (data.audio) {
                             const hashes = {};
+                            const toWrite = {};
                             for (const [key, entry] of Object.entries(data.audio)) {
                                 // Support both old format (plain base64) and new format ({data, hash})
                                 const base64 = typeof entry === 'string' ? entry : entry.data;
                                 const hash = typeof entry === 'string' ? '' : (entry.hash || '');
-                                const blob = await base64ToBlob(base64);
-                                await saveAudioBlob(key, blob);
+                                toWrite[key] = { data: base64 };
                                 hashes[key] = hash;
                             }
+                            await batchSaveAudio(toWrite);
                             localStorage.setItem('ll_audio_hashes', JSON.stringify(hashes));
                         }
                         if (data.version) {
