@@ -1246,7 +1246,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.6.13';
+        const APP_VERSION = '2.6.14';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
@@ -1643,11 +1643,12 @@
                     {(appUpdate || updateAvailable || (updateError && !updateLoading) || updateSuccess) && (
                         <div className="fixed top-0 left-0 right-0 z-50 shadow-md">
                             {appUpdate && (
-                                <div className="bg-indigo-600 text-white px-4 py-2">
+                                <div className="px-4 py-3" style={{ backgroundColor: '#3730a3', color: '#ffffff' }}>
                                     <div className="flex items-center justify-between gap-3">
-                                        <span className="font-bold text-sm">🚀 New app version available (v{appUpdate})</span>
+                                        <span className="font-bold text-sm" style={{ color: '#ffffff' }}>🚀 New app version available (v{appUpdate})</span>
                                         <button onClick={applyAppUpdate}
-                                            className="bg-white text-indigo-700 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-indigo-100 transition-colors shrink-0">
+                                            className="px-4 py-1.5 rounded-full font-black text-xs shrink-0"
+                                            style={{ backgroundColor: '#ffffff', color: '#3730a3' }}>
                                             Reload
                                         </button>
                                     </div>
@@ -1773,7 +1774,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.13</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.14</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2279,15 +2280,15 @@
                                     }
 
                                     return (
-                                        <div key={word.id} className="flex items-center justify-between bg-white p-2 rounded border shadow-sm">
-                                            <div className="flex items-center gap-3 overflow-hidden">
+                                        <div key={word.id} className="flex items-center justify-between bg-white p-2 rounded border shadow-sm gap-2" style={{ flexWrap: 'wrap' }}>
+                                            <div className="flex items-center gap-3 overflow-hidden" style={{ flex: '1 1 60%', minWidth: '160px' }}>
                                                 <span className="text-2xl min-w-[30px] text-center">{word.icon}</span>
-                                                <div className="truncate">
+                                                <div className="overflow-hidden" style={{ minWidth: 0 }}>
                                                     <div className="font-bold truncate">{word.english}</div>
                                                     <div className="text-xs text-gray-500 truncate">{word.yoruba} • {word.gungbe}</div>
                                                 </div>
                                             </div>
-                                            <div className="flex gap-2 shrink-0">
+                                            <div className="flex gap-2 shrink-0" style={{ marginLeft: 'auto' }}>
                                                  {!isDeleting && (
                                                      <>
                                                         <VoiceRecorder wordId={word.id} lang="yoruba" textToSpeak={word.yoruba} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'yoruba')} label="Y"/>
