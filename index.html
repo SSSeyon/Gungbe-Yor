@@ -1229,10 +1229,13 @@
             return false;
         };
 
-        // Increment version: "1.2.3" -> "1.3.0"
+        // Increment version: bump the patch, preserving major/minor (e.g.
+        // "2.6.4" -> "2.6.5"). Always produces a strictly-newer version string.
         const incrementVersion = (v) => {
-            const parts = String(v || '1.0.0').split('.').map(Number);
-            return '1.' + (parts[1] + 1) + '.0';
+            const parts = String(v || '0.0.0').split('.').map(n => Number(n) || 0);
+            while (parts.length < 3) parts.push(0);
+            parts[2] = parts[2] + 1;
+            return parts.slice(0, 3).join('.');
         };
 
         // --- INITIAL DATA ---
@@ -1273,6 +1276,8 @@
             const [settings, setSettings] = useState({ autoPlayAudio: true, flashcardFront: 'english' });
             const [updateAvailable, setUpdateAvailable] = useState(null);
             const [updateLoading, setUpdateLoading] = useState(false);
+            const [downloadProgress, setDownloadProgress] = useState(0);
+            const [updateError, setUpdateError] = useState('');
             const [localVersion, setLocalVersion] = useState('none');
 
             // Push a history entry each time mode changes away from landing
@@ -1371,8 +1376,39 @@
             const fetchAndApplyPack = async ({ force = false } = {}) => {
                 setUpdateLoading(true);
                 try {
+                    setUpdateError('');
+                    setDownloadProgress(0);
                     const res = await fetch(REMOTE_WORDS_URL + '?t=' + Date.now(), { cache: 'no-store' });
-                    const data = await res.json();
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+                    // Stream the body so we can show real download progress. The pack is
+                    // mostly audio base64, so this is where the time goes.
+                    let jsonText;
+                    const total = Number(res.headers.get('Content-Length')) || 0;
+                    if (res.body && res.body.getReader) {
+                        const reader = res.body.getReader();
+                        const chunks = [];
+                        let received = 0;
+                        // eslint-disable-next-line no-constant-condition
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            chunks.push(value);
+                            received += value.length;
+                            if (total) {
+                                setDownloadProgress(Math.min(99, Math.round((received / total) * 100)));
+                            }
+                        }
+                        const merged = new Uint8Array(received);
+                        let offset = 0;
+                        for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+                        jsonText = new TextDecoder('utf-8').decode(merged);
+                    } else {
+                        // Older browsers without a streaming body: fall back to a plain read
+                        jsonText = await res.text();
+                    }
+                    setDownloadProgress(100);
+                    const data = JSON.parse(jsonText);
 
                     // Always update words (text only, tiny)
                     if (data.words) {
@@ -1422,10 +1458,12 @@
                     setUpdateAvailable(null);
                     return { ok: true, version: appliedVersion, count: (data.words || []).length };
                 } catch (e) {
-                    if (showMsg) showMsg('Update failed: ' + e.message + '. Check your connection and try again.', true);
+                    console.error('Word pack update failed:', e);
+                    setUpdateError('Update failed: ' + e.message + '. Check your connection and try again.');
                     return { ok: false, error: e.message };
                 } finally {
                     setUpdateLoading(false);
+                    setTimeout(() => setDownloadProgress(0), 600);
                 }
             };
 
@@ -1491,17 +1529,30 @@
                 <div className="min-h-screen relative font-sans text-gray-800">
                     <Background theme={theme} />
                     {updateAvailable && (
-                        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-400 text-yellow-900 px-4 py-3 flex items-center justify-between gap-3 shadow-md">
-                            <span className="font-bold text-sm">📦 New word pack available (v{updateAvailable})</span>
-                            <button onClick={applyUpdate} disabled={updateLoading}
-                                className="bg-yellow-900 text-yellow-100 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-yellow-800 transition-colors shrink-0">
-                                {updateLoading ? 'Downloading...' : 'Update Now'}
-                            </button>
+                        <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-400 text-yellow-900 px-4 py-2 shadow-md">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-bold text-sm">📦 New word pack available (v{updateAvailable})</span>
+                                <button onClick={applyUpdate} disabled={updateLoading}
+                                    className="bg-yellow-900 text-yellow-100 px-4 py-1.5 rounded-full font-bold text-xs hover:bg-yellow-800 transition-colors shrink-0 disabled:opacity-70">
+                                    {updateLoading ? (downloadProgress > 0 ? 'Downloading ' + downloadProgress + '%' : 'Starting...') : 'Update Now'}
+                                </button>
+                            </div>
+                            {updateLoading && (
+                                <div className="mt-1.5 h-2 w-full bg-yellow-900/20 rounded-full overflow-hidden">
+                                    <div className="h-full bg-yellow-900 transition-all duration-200" style={{ width: (downloadProgress || 3) + '%' }}></div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {updateError && !updateLoading && (
+                        <div className="fixed top-0 left-0 right-0 z-50 bg-red-500 text-white px-4 py-2 text-xs font-bold flex items-center justify-between gap-3 shadow-md">
+                            <span>{updateError}</span>
+                            <button onClick={() => setUpdateError('')} className="bg-white/20 px-3 py-1 rounded-full shrink-0">Dismiss</button>
                         </div>
                     )}
                     <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} updateLoading={updateLoading} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -1587,7 +1638,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.4</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.5</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1647,7 +1698,7 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, updateLoading, onBack }) => {
+        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, updateLoading, downloadProgress, onBack }) => {
             const [view, setView] = useState('words');
             const [pullMsg, setPullMsg] = useState('');
             const [newWord, setNewWord] = useState({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
@@ -1739,17 +1790,29 @@
                         const hash = await hashString(base64);
                         audioWithHashes[key] = { data: base64, hash };
                     }
-                    const currentVersion = localStorage.getItem('ll_words_version') || '0.0.0';
-                    const newVersion = incrementVersion(currentVersion);
-                    localStorage.setItem('ll_words_version', newVersion);
-                    setLocalVersion(newVersion);
+                    // Base the new version on whatever is currently published on GitHub
+                    // (falling back to this device's version) so repeated exports always
+                    // increment past the live pack, even if this device hasn't pulled.
+                    let baseVersion = localStorage.getItem('ll_words_version') || '0.0.0';
+                    try {
+                        const vr = await fetch(REMOTE_VERSION_URL + '?t=' + Date.now(), { cache: 'no-store' });
+                        if (vr.ok) {
+                            const remoteV = await vr.json();
+                            if (remoteV && remoteV.version && isNewer(baseVersion, remoteV.version)) {
+                                baseVersion = remoteV.version;
+                            }
+                        }
+                    } catch (e) { /* offline or no pack yet - fall back to local */ }
+                    const newVersion = incrementVersion(baseVersion);
+                    // NOTE: deliberately do NOT save newVersion (or the new hashes) to
+                    // THIS device. If we did, this device's stored version would equal
+                    // the version we just published, so it would never see the GitHub
+                    // pack as "newer" and would never be prompted to update. By leaving
+                    // its stored version untouched, the exporting device is treated like
+                    // any other device: on next launch it sees the newer remote version,
+                    // gets the prompt, and its Data Pack Version updates after it pulls.
 
-                    // Also update stored hashes locally so next export is accurate
-                    const hashes = {};
-                    for (const [key, entry] of Object.entries(audioWithHashes)) hashes[key] = entry.hash;
-                    localStorage.setItem('ll_audio_hashes', JSON.stringify(hashes));
-
-                    // Download words.json
+                    // Download words.json (stamped with the new, published version)
                     const backupData = { words, audio: audioWithHashes, version: newVersion, timestamp: new Date().toISOString() };
                     const blob = new Blob([JSON.stringify(backupData)], {type: 'application/json'});
                     const url = URL.createObjectURL(blob);
@@ -1887,8 +1950,13 @@
                                 {forcePull && (
                                     <button onClick={async () => { setPullMsg(''); const r = await forcePull(); if (r && r.ok) { setPullMsg('Re-downloaded v' + (r.version || '?') + ' (' + r.count + ' words).'); } else { setPullMsg('Re-download failed. Check your connection.'); } }} disabled={updateLoading}
                                         className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60">
-                                        <Icon name="Download" size={16}/> {updateLoading ? 'Re-downloading...' : 'Re-download word pack from GitHub'}
+                                        <Icon name="Download" size={16}/> {updateLoading ? (downloadProgress > 0 ? 'Downloading ' + downloadProgress + '%' : 'Starting...') : 'Re-download word pack from GitHub'}
                                     </button>
+                                )}
+                                {updateLoading && (
+                                    <div className="mt-2 h-2 w-full bg-teal-100 rounded-full overflow-hidden">
+                                        <div className="h-full bg-teal-500 transition-all duration-200" style={{ width: (downloadProgress || 3) + '%' }}></div>
+                                    </div>
                                 )}
                                 {pullMsg && <p className="text-xs text-teal-600 font-bold mt-1 text-center">{pullMsg}</p>}
                             </div>
