@@ -1220,7 +1220,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.6.9';
+        const APP_VERSION = '2.6.10';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
@@ -1706,7 +1706,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.9</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.10</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1781,6 +1781,7 @@
             const [filter, setFilter] = useState('All');
             const [searchTerm, setSearchTerm] = useState('');
             const [exporting, setExporting] = useState(false);
+            const [pendingVersion, setPendingVersion] = useState(null); // version stamped into the last words.json export, for the separate version.json button
             const fileInputRef = useRef(null);
 
             // Reflect the "word changes need exporting to reach other devices" flag.
@@ -1895,16 +1896,50 @@
                         setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(dlUrl); }, 6000);
                     };
 
-                    // Fire BOTH downloads back-to-back with NO await between them. On mobile,
-                    // any await (e.g. a network fetch or a timer) before the second click
-                    // breaks the user-gesture chain and the browser blocks the 2nd download.
-                    // All async work (audio read, remote version fetch) is already done above,
-                    // so both clicks happen synchronously inside the same task here.
+                    // Download ONLY words.json here. Mobile browsers block a second
+                    // download in the same tap, so version.json has its own button
+                    // (handleExportVersion) which the user taps separately. We remember
+                    // the version just stamped into words.json so that button writes the
+                    // exact same number.
                     const backupData = { words, audio: audioWithHashes, version: newVersion, timestamp: new Date().toISOString() };
-                    const versionData = { version: newVersion, timestamp: new Date().toISOString() };
                     triggerDownload(backupData, 'words.json');
-                    triggerDownload(versionData, 'version.json');
+                    setPendingVersion(newVersion);
                     try { localStorage.removeItem('ll_words_dirty'); } catch (e) {}
+                } catch (e) { alert('Export failed: ' + e.message); }
+                finally { setExporting(false); }
+            };
+
+            // Separate button: download version.json on its own tap. Uses the version
+            // stamped into the most recent words.json export (pendingVersion) so the two
+            // files always agree. If the user taps this before ever exporting words this
+            // session, fall back to computing the next version from the live remote pack.
+            const handleExportVersion = async () => {
+                setExporting(true);
+                try {
+                    let v = pendingVersion;
+                    if (!v) {
+                        let baseVersion = localStorage.getItem('ll_words_version') || '0.0.0';
+                        try {
+                            const vr = await fetch(REMOTE_VERSION_URL + '?t=' + Date.now(), { cache: 'no-store' });
+                            if (vr.ok) {
+                                const remoteV = await vr.json();
+                                if (remoteV && remoteV.version && isNewer(baseVersion, remoteV.version)) {
+                                    baseVersion = remoteV.version;
+                                }
+                            }
+                        } catch (e) { /* offline or no pack yet */ }
+                        v = incrementVersion(baseVersion);
+                        setPendingVersion(v);
+                    }
+                    const versionData = { version: v, timestamp: new Date().toISOString() };
+                    const blob = new Blob([JSON.stringify(versionData)], { type: 'application/json' });
+                    const dlUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = dlUrl; a.download = 'version.json';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(dlUrl); }, 6000);
                 } catch (e) { alert('Export failed: ' + e.message); }
                 finally { setExporting(false); }
             };
@@ -2029,6 +2064,8 @@
                                     <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
                                     <button onClick={handleReset} className="bg-red-50 text-red-600 p-2 rounded-lg border border-red-100 font-bold hover:bg-red-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Reset</button>
                                 </div>
+                                <button onClick={handleExportVersion} disabled={exporting} className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Export version.json (tap after Words + Audio)'}</button>
+                                <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: 'sans-serif' }}>Mobile only lets one file download per tap. Tap "Export Words + Audio" first, then this button, then upload both files to GitHub.</p>
                                 <div className="grid grid-cols-2 gap-2 mt-2">
                                     <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                     <button onClick={handleHardRefresh} className="bg-orange-50 text-orange-600 p-2 rounded-lg border border-orange-100 font-bold hover:bg-orange-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Hard Refresh</button>
