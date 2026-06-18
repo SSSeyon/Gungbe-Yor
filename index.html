@@ -1220,7 +1220,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.6.8';
+        const APP_VERSION = '2.6.9';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
@@ -1706,7 +1706,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.8</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.9</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1882,10 +1882,8 @@
                     // any other device: on next launch it sees the newer remote version,
                     // gets the prompt, and its Data Pack Version updates after it pulls.
 
-                    // Helper: trigger a download reliably. Mobile browsers (Safari and
-                    // Chrome on Android) silently drop a SECOND synchronous anchor click,
-                    // so the two files must be downloaded one at a time with a gap between
-                    // them, and the object URL appended to the DOM then revoked after use.
+                    // Helper: trigger a download. The anchor is appended to the DOM
+                    // (required by some mobile browsers) and the object URL revoked later.
                     const triggerDownload = (obj, filename) => {
                         const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
                         const dlUrl = URL.createObjectURL(blob);
@@ -1894,23 +1892,21 @@
                         a.style.display = 'none';
                         document.body.appendChild(a);
                         a.click();
-                        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(dlUrl); }, 4000);
+                        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(dlUrl); }, 6000);
                     };
-                    const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-                    // Download words.json (stamped with the new, published version)
+                    // Fire BOTH downloads back-to-back with NO await between them. On mobile,
+                    // any await (e.g. a network fetch or a timer) before the second click
+                    // breaks the user-gesture chain and the browser blocks the 2nd download.
+                    // All async work (audio read, remote version fetch) is already done above,
+                    // so both clicks happen synchronously inside the same task here.
                     const backupData = { words, audio: audioWithHashes, version: newVersion, timestamp: new Date().toISOString() };
-                    triggerDownload(backupData, 'words.json');
-
-                    // Wait before the second download so mobile browsers do not block it
-                    await wait(1200);
-
-                    // Download version.json
                     const versionData = { version: newVersion, timestamp: new Date().toISOString() };
+                    triggerDownload(backupData, 'words.json');
                     triggerDownload(versionData, 'version.json');
                     try { localStorage.removeItem('ll_words_dirty'); } catch (e) {}
                 } catch (e) { alert('Export failed: ' + e.message); }
-                setExporting(false);
+                finally { setExporting(false); }
             };
 
             const handleExportAudioOnly = async () => {
@@ -1931,9 +1927,12 @@
                     const a = document.createElement('a');
                     a.href = url;
                     a.download = 'words-with-audio.json';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
                     a.click();
+                    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 6000);
                 } catch (e) { alert('Export failed: ' + e.message); }
-                setExporting(false);
+                finally { setExporting(false); }
             };
 
             const handleRestore = (e) => {
