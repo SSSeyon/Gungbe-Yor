@@ -1476,6 +1476,26 @@
             // matches remote and therefore never gets the banner) can still re-pull.
             const forcePull = async () => fetchAndApplyPack({ force: true });
 
+            // Manual, on-demand version check. Runs the SAME comparison as the launch
+            // detection but reports the outcome either way, so deployment can be
+            // verified without guessing. Returns the local + remote versions and
+            // whether an update is available; also raises the banner if one is.
+            const checkForUpdate = async () => {
+                const storedVersion = localStorage.getItem('ll_words_version') || '0.0.0';
+                try {
+                    const r = await fetch(REMOTE_VERSION_URL + '?t=' + Date.now(), { cache: 'no-store' });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const remote = await r.json();
+                    const remoteVersion = remote && remote.version ? remote.version : null;
+                    if (!remoteVersion) return { ok: false, error: 'No version.json found on GitHub yet.' };
+                    const available = isNewer(storedVersion, remoteVersion);
+                    if (available) setUpdateAvailable(remoteVersion);
+                    return { ok: true, available, local: storedVersion, remote: remoteVersion };
+                } catch (e) {
+                    return { ok: false, error: e.message };
+                }
+            };
+
             useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
             useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
             useEffect(() => localStorage.setItem('ll_stickers', JSON.stringify(stickers)), [stickers]);
@@ -1552,7 +1572,7 @@
                     )}
                     <div className={`relative z-10 pb-8 ${updateAvailable ? 'pt-14' : ''}`}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -1638,7 +1658,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.6</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.7</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1698,9 +1718,11 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, updateLoading, downloadProgress, onBack }) => {
+        const ParentManager = ({ words, setWords, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
             const [view, setView] = useState('words');
             const [pullMsg, setPullMsg] = useState('');
+            const [checkMsg, setCheckMsg] = useState('');
+            const [checking, setChecking] = useState(false);
             const [newWord, setNewWord] = useState({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
             
             // Inline editing state
@@ -1947,6 +1969,13 @@
                                     <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                     <button onClick={handleHardRefresh} className="bg-orange-50 text-orange-600 p-2 rounded-lg border border-orange-100 font-bold hover:bg-orange-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Hard Refresh</button>
                                 </div>
+                                {checkForUpdate && (
+                                    <button onClick={async () => { setChecking(true); setCheckMsg(''); const r = await checkForUpdate(); setChecking(false); if (!r.ok) { setCheckMsg('Could not check: ' + r.error); } else if (r.available) { setCheckMsg('Update available! GitHub has v' + r.remote + ', this device has v' + r.local + '. Tap the yellow banner or "Re-download" below.'); } else { setCheckMsg('Up to date. This device has v' + r.local + ', GitHub has v' + r.remote + '.'); } }} disabled={checking}
+                                        className="w-full mt-2 bg-indigo-50 text-indigo-700 p-2 rounded-lg border border-indigo-100 font-bold hover:bg-indigo-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60">
+                                        <Icon name="RotateCcw" size={16}/> {checking ? 'Checking...' : 'Check for updates'}
+                                    </button>
+                                )}
+                                {checkMsg && <p className="text-xs text-indigo-600 font-bold mt-1 text-center">{checkMsg}</p>}
                                 {forcePull && (
                                     <button onClick={async () => { setPullMsg(''); const r = await forcePull(); if (r && r.ok) { setPullMsg('Re-downloaded v' + (r.version || '?') + ' (' + r.count + ' words).'); } else { setPullMsg('Re-download failed. Check your connection.'); } }} disabled={updateLoading}
                                         className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60">
