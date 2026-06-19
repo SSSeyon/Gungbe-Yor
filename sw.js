@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v11';
+const CACHE_NAME = 'little-linguist-v12';
 
 // Local app files to pre-cache on install.
 const LOCAL_ASSETS = [
@@ -73,8 +73,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // version.json: network-first, short timeout, fall back to cache
-  if (url.includes('version.json')) {
+  // version.json, app.json, words.json: always network-first with a short timeout,
+  // falling back to cache only when offline. These three drive the update system, so
+  // a fresh copy must win over any cached one. This rule sits ABOVE the ?t= bypass so
+  // it applies whether or not the app added a cache-buster, and it still provides an
+  // offline fallback (which the bare ?t= bypass does not).
+  if (url.includes('version.json') || url.includes('app.json') || url.includes('words.json')) {
     event.respondWith(
       Promise.race([
         fetch(request).then(res => {
@@ -82,7 +86,7 @@ self.addEventListener('fetch', (event) => {
           return res;
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
-      ]).catch(() => caches.match(request))
+      ]).catch(() => caches.match(request, { ignoreSearch: true }))
     );
     return;
   }

@@ -1193,16 +1193,23 @@
             // Fast path: decode with atob rather than routing through fetch(data:...).
             // This avoids a full async fetch round-trip per entry, which is significant
             // when converting hundreds of audio clips on a mobile device.
+            // Returns null for empty or malformed input so callers can skip the entry
+            // rather than writing a corrupt 0-byte blob into IndexedDB.
+            if (!base64Data || typeof base64Data !== 'string') return null;
             try {
-                const [header, b64] = base64Data.split(',');
+                const parts = base64Data.split(',');
+                const b64 = parts.length > 1 ? parts[1] : parts[0];
+                if (!b64 || !b64.trim()) return null;
+                const header = parts.length > 1 ? parts[0] : '';
                 const mime = (header.match(/:(.*?);/) || [])[1] || 'audio/webm';
                 const raw = atob(b64);
+                if (raw.length === 0) return null;
                 const bytes = new Uint8Array(raw.length);
                 for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
                 return new Blob([bytes], { type: mime });
             } catch (e) {
-                // Fallback for any malformed entry
-                return new Blob([], { type: 'audio/webm' });
+                // Malformed base64 - skip rather than store garbage
+                return null;
             }
         };
 
@@ -1223,15 +1230,20 @@
             if (keys.length === 0) return {};
             const db = await initDB();
             const blobs = {};
-            // Convert all base64 strings to blobs first (synchronous, no IDB yet)
+            // Convert all base64 strings to blobs first (synchronous, no IDB yet).
+            // Skip any entry that fails to decode so corrupt 0-byte blobs are never
+            // written into IndexedDB.
             for (const key of keys) {
-                blobs[key] = base64ToBlob(entries[key].data);
+                const blob = base64ToBlob(entries[key].data);
+                if (blob) blobs[key] = blob;
             }
-            // Write all blobs in a single readwrite transaction
+            const validKeys = Object.keys(blobs);
+            if (validKeys.length === 0) return {};
+            // Write all valid blobs in a single readwrite transaction
             await new Promise((resolve, reject) => {
                 const tx = db.transaction([STORE_NAME], 'readwrite');
                 const store = tx.objectStore(STORE_NAME);
-                for (const key of keys) {
+                for (const key of validKeys) {
                     store.put(blobs[key], key);
                 }
                 tx.oncomplete = resolve;
@@ -1246,7 +1258,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.6.16';
+        const APP_VERSION = '2.6.17';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
 
         // Compare two semver strings like "1.2.3". Returns true if b is newer than a.
@@ -1297,6 +1309,7 @@
             // effect after words have loaded (never during useState - see handover rules)
             const [mode, setMode] = useState('landing');
             const modeRef = useRef('landing');
+            const currentAudioRef = useRef(null); // the single Audio element reused for all playback, so taps don't stack
             const kidBackRef = useRef(null);
             useEffect(() => { modeRef.current = mode; }, [mode]);
             const [words, setWords] = useState([]);
@@ -1599,8 +1612,22 @@
 
             const handleAudioPlay = async (wordId, lang) => {
                 const audioKey = `${wordId}_${lang}`;
+                // Stop any clip already playing so rapid taps don't stack overlapping
+                // sounds. One shared Audio element is reused for every playback.
+                const stopCurrent = () => {
+                    if (currentAudioRef.current) {
+                        try { currentAudioRef.current.pause(); currentAudioRef.current.currentTime = 0; } catch (e) {}
+                    }
+                    if ('speechSynthesis' in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
+                };
+                const playUrl = (url) => {
+                    stopCurrent();
+                    const audio = new Audio(url);
+                    currentAudioRef.current = audio;
+                    audio.play().catch(e => console.log(e));
+                };
                 if (audioCache[audioKey]) {
-                    new Audio(audioCache[audioKey]).play().catch(e => console.log(e));
+                    playUrl(audioCache[audioKey]);
                     return;
                 }
                 try {
@@ -1608,9 +1635,10 @@
                     if (blob) {
                         const url = URL.createObjectURL(blob);
                         setAudioCache(prev => ({ ...prev, [audioKey]: url }));
-                        new Audio(url).play().catch(e => console.log(e));
+                        playUrl(url);
                     } else if ('speechSynthesis' in window && lang === 'english') {
                          // Fallback for English
+                         stopCurrent();
                          const u = new SpeechSynthesisUtterance(words.find(w=>w.id===wordId)?.english || "");
                          window.speechSynthesis.speak(u);
                     }
@@ -1774,7 +1802,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.16</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.6.17</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
