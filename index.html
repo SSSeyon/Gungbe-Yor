@@ -1275,7 +1275,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.8.2';
+        const APP_VERSION = '2.8.3';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
@@ -1670,10 +1670,21 @@
                 fsLoadFrames().then(remote => {
                     if (!remote || !Array.isArray(remote)) return;
                     setFrames(local => {
-                        const localIds = new Set(local.map(f => f.id));
-                        const newOnes = remote.filter(f => !localIds.has(f.id));
-                        if (newOnes.length === 0) return local;
-                        return [...local, ...newOnes];
+                        const localMap = new Map(local.map(f => [f.id, f]));
+                        let changed = false;
+                        const merged = local.map(f => {
+                            const rem = remote.find(r => r.id === f.id);
+                            if (!rem) return f;
+                            // Use whichever has more fillers; prefer remote text as authoritative
+                            const fillers = rem.fillers && rem.fillers.length > f.fillers.length ? rem.fillers : f.fillers;
+                            const next = { ...f, en: rem.en || f.en, yoruba: rem.yoruba || f.yoruba, gungbe: rem.gungbe || f.gungbe, fillers };
+                            if (JSON.stringify(next) !== JSON.stringify(f)) changed = true;
+                            return next;
+                        });
+                        const newOnes = remote.filter(r => !localMap.has(r.id));
+                        if (newOnes.length > 0) changed = true;
+                        if (!changed) return local;
+                        return [...merged, ...newOnes];
                     });
                 }).catch(() => {});
             }, []);
@@ -1879,7 +1890,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.2</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.3</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1946,6 +1957,10 @@
             const [expandedId, setExpandedId] = useState(null);
             const [newFrame, setNewFrame] = useState({ en: '', yoruba: '', gungbe: '' });
             const [newFiller, setNewFiller] = useState({});
+            const [editingFrameId, setEditingFrameId] = useState(null);
+            const [editFrameForm, setEditFrameForm] = useState({ en: '', yoruba: '', gungbe: '' });
+            const [editingFillerId, setEditingFillerId] = useState(null);
+            const [editFillerForm, setEditFillerForm] = useState({ en: '', yoruba: '', gungbe: '' });
 
             const genId = () => 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
@@ -1974,6 +1989,29 @@
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.filter(x => x.id !== fillerId) } : f));
             };
 
+            const startEditFrame = (frame) => {
+                setEditingFrameId(frame.id);
+                setEditFrameForm({ en: frame.en, yoruba: frame.yoruba, gungbe: frame.gungbe });
+                setEditingFillerId(null);
+            };
+
+            const saveEditFrame = (frameId) => {
+                if (!editFrameForm.en.trim()) { alert('English frame cannot be empty.'); return; }
+                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, en: editFrameForm.en.trim(), yoruba: editFrameForm.yoruba.trim(), gungbe: editFrameForm.gungbe.trim() } : f));
+                setEditingFrameId(null);
+            };
+
+            const startEditFiller = (filler) => {
+                setEditingFillerId(filler.id);
+                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '' });
+            };
+
+            const saveEditFiller = (frameId, fillerId) => {
+                if (!editFillerForm.en.trim()) { alert('English word cannot be empty.'); return; }
+                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim() } : x) } : f));
+                setEditingFillerId(null);
+            };
+
             const setNF = (frameId, key, val) => {
                 setNewFiller(prev => ({ ...prev, [frameId]: { ...(prev[frameId] || {}), [key]: val } }));
             };
@@ -1999,32 +2037,69 @@
                     {frames.map(frame => (
                         <div key={frame.id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                             <div className="flex items-center justify-between p-3 gap-2">
-                                <button onClick={() => setExpandedId(expandedId === frame.id ? null : frame.id)} className="flex-1 text-left" style={{ minWidth: 0 }}>
+                                <button onClick={() => { setExpandedId(expandedId === frame.id ? null : frame.id); setEditingFrameId(null); setEditingFillerId(null); }} className="flex-1 text-left" style={{ minWidth: 0 }}>
                                     <div className="font-black text-gray-800 truncate">{frame.en}</div>
                                     <div className="text-xs text-gray-500 truncate">{frame.yoruba} • {frame.gungbe}</div>
                                     <div className="text-[11px] text-teal-600 font-bold mt-0.5">{frame.fillers.length} word{frame.fillers.length === 1 ? '' : 's'}</div>
                                 </button>
                                 <div className="flex gap-1 shrink-0">
-                                    <button onClick={() => setExpandedId(expandedId === frame.id ? null : frame.id)} className="text-gray-400 p-2 hover:bg-gray-100 rounded font-black" style={{ fontFamily: 'sans-serif', fontSize: '14px' }}>{expandedId === frame.id ? '▲' : '▼'}</button>
+                                    <button onClick={() => { setExpandedId(expandedId === frame.id ? null : frame.id); setEditingFrameId(null); setEditingFillerId(null); }} className="text-gray-400 p-2 hover:bg-gray-100 rounded font-black" style={{ fontFamily: 'sans-serif', fontSize: '14px' }}>{expandedId === frame.id ? '▲' : '▼'}</button>
                                     <button onClick={() => deleteFrame(frame.id)} className="text-red-400 p-2 hover:bg-red-50 rounded"><Icon name="Trash2" size={16}/></button>
                                 </div>
                             </div>
 
                             {expandedId === frame.id && (
                                 <div className="px-3 pb-3 space-y-2 border-t border-gray-100 pt-3">
+
+                                    {editingFrameId !== frame.id && (
+                                        <button onClick={() => startEditFrame(frame)} className="w-full py-1.5 rounded-lg font-bold text-teal-700 text-xs flex items-center justify-center gap-1" style={{ background: '#ccfbf1' }}>
+                                            <Icon name="Edit" size={13}/> Edit phrase text
+                                        </button>
+                                    )}
+
+                                    {editingFrameId === frame.id && (
+                                        <div className="bg-teal-50 border border-teal-200 rounded-xl p-2 space-y-1 mb-2">
+                                            <div className="text-[11px] font-bold text-teal-700">Edit phrase text</div>
+                                            <input value={editFrameForm.en} onChange={e => setEditFrameForm(p => ({ ...p, en: e.target.value }))} placeholder="English" className="w-full p-2 border rounded-lg text-sm" />
+                                            <input value={editFrameForm.yoruba} onChange={e => setEditFrameForm(p => ({ ...p, yoruba: e.target.value }))} placeholder="Yoruba" className="w-full p-2 border rounded-lg text-sm" />
+                                            <input value={editFrameForm.gungbe} onChange={e => setEditFrameForm(p => ({ ...p, gungbe: e.target.value }))} placeholder="Gungbe" className="w-full p-2 border rounded-lg text-sm" />
+                                            <div className="flex gap-2">
+                                                <button onClick={() => saveEditFrame(frame.id)} className="flex-1 py-1.5 rounded-lg font-bold text-white text-xs" style={{ background: '#14b8a6' }}>Save</button>
+                                                <button onClick={() => setEditingFrameId(null)} className="flex-1 py-1.5 rounded-lg font-bold text-gray-600 text-xs bg-gray-100">Cancel</button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {frame.fillers.map(filler => {
                                         const baseId = 'sf_' + frame.id + '_' + filler.id;
                                         return (
-                                            <div key={filler.id} className="bg-gray-50 rounded-xl p-2" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                                                <div style={{ flex: '1 1 45%', minWidth: '120px' }}>
-                                                    <div className="font-bold text-sm text-gray-800 truncate">{frame.en.replace('___', filler.en)}</div>
-                                                    <div className="text-[11px] text-gray-500 truncate">{frame.yoruba.replace('___', filler.yoruba || '?')} • {frame.gungbe.replace('___', filler.gungbe || '?')}</div>
-                                                </div>
-                                                <div className="flex gap-1 items-center" style={{ marginLeft: 'auto' }}>
-                                                    <VoiceRecorder wordId={baseId} lang="yoruba" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'yoruba')} label="Y"/>
-                                                    <VoiceRecorder wordId={baseId} lang="gungbe" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'gungbe')} label="G"/>
-                                                    <button onClick={() => deleteFiller(frame.id, filler.id)} className="text-red-400 p-1 hover:bg-red-50 rounded"><Icon name="X" size={16}/></button>
-                                                </div>
+                                            <div key={filler.id} className="bg-gray-50 rounded-xl p-2">
+                                                {editingFillerId === filler.id ? (
+                                                    <div className="space-y-1">
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                            <input value={editFillerForm.en} onChange={e => setEditFillerForm(p => ({ ...p, en: e.target.value }))} placeholder="English" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '80px' }} />
+                                                            <input value={editFillerForm.yoruba} onChange={e => setEditFillerForm(p => ({ ...p, yoruba: e.target.value }))} placeholder="Yoruba" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '80px' }} />
+                                                            <input value={editFillerForm.gungbe} onChange={e => setEditFillerForm(p => ({ ...p, gungbe: e.target.value }))} placeholder="Gungbe" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '80px' }} />
+                                                        </div>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => saveEditFiller(frame.id, filler.id)} className="flex-1 py-1 rounded-lg font-bold text-white text-xs" style={{ background: '#14b8a6' }}>Save</button>
+                                                            <button onClick={() => setEditingFillerId(null)} className="flex-1 py-1 rounded-lg font-bold text-gray-600 text-xs bg-gray-100">Cancel</button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
+                                                        <div style={{ flex: '1 1 45%', minWidth: '120px' }}>
+                                                            <div className="font-bold text-sm text-gray-800 truncate">{frame.en.replace('___', filler.en)}</div>
+                                                            <div className="text-[11px] text-gray-500 truncate">{frame.yoruba.replace('___', filler.yoruba || '?')} • {frame.gungbe.replace('___', filler.gungbe || '?')}</div>
+                                                        </div>
+                                                        <div className="flex gap-1 items-center" style={{ marginLeft: 'auto' }}>
+                                                            <button onClick={() => startEditFiller(filler)} className="text-teal-500 p-1 hover:bg-teal-50 rounded" title="Edit word"><Icon name="Edit" size={14}/></button>
+                                                            <VoiceRecorder wordId={baseId} lang="yoruba" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'yoruba')} label="Y"/>
+                                                            <VoiceRecorder wordId={baseId} lang="gungbe" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'gungbe')} label="G"/>
+                                                            <button onClick={() => deleteFiller(frame.id, filler.id)} className="text-red-400 p-1 hover:bg-red-50 rounded"><Icon name="X" size={16}/></button>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
@@ -2651,13 +2726,14 @@
             };
 
             const langLabel = lang === 'yoruba' ? 'Yoruba' : 'Gungbe';
-            const playable = [];
+            const allCards = [];
             (frames || []).forEach(frame => {
                 frame.fillers.forEach(filler => {
                     const baseId = 'sf_' + frame.id + '_' + filler.id;
-                    if (available && available[baseId]) playable.push({ frame, filler, baseId });
+                    allCards.push({ frame, filler, baseId, hasAudio: !!(available && available[baseId]) });
                 });
             });
+            const playable = allCards.filter(c => c.hasAudio);
 
             return (
                 <div className="p-4 max-w-3xl mx-auto animate-pop">
@@ -2671,33 +2747,44 @@
                         <div className="text-center text-gray-400 py-12 font-bold">Loading…</div>
                     )}
 
-                    {available !== null && playable.length === 0 && (
+                    {available !== null && allCards.length === 0 && (
                         <div className="flex flex-col items-center justify-center py-16 text-center">
                             <div className="text-6xl mb-4">🎙️</div>
-                            <p className="text-xl font-bold text-gray-500 mb-2">No {langLabel} sentences yet</p>
-                            <p className="text-gray-400 text-sm">A grown-up can record sentences in the Parent Zone under "Phrases".</p>
+                            <p className="text-xl font-bold text-gray-500 mb-2">No sentences yet</p>
+                            <p className="text-gray-400 text-sm">A grown-up can add sentences in the Parent Zone under "Phrases".</p>
                         </div>
                     )}
 
-                    {available !== null && playable.length > 0 && (
+                    {available !== null && allCards.length > 0 && (
                         <div className="space-y-3">
-                            {playable.map(({ frame, filler, baseId }) => {
+                            {allCards.map(({ frame, filler, baseId, hasAudio }) => {
                                 const sentence = (lang === 'yoruba' ? frame.yoruba : frame.gungbe).replace('___', (lang === 'yoruba' ? filler.yoruba : filler.gungbe) || filler.en);
                                 const english = frame.en.replace('___', filler.en);
                                 const isPlaying = playingId === baseId;
+                                if (hasAudio) {
+                                    return (
+                                        <button key={baseId} onClick={() => playSentence(frame, filler)}
+                                            className={`w-full bg-white rounded-3xl shadow-lg border-b-4 p-5 flex items-center gap-4 text-left transition-all ${isPlaying ? 'scale-95' : 'hover:-translate-y-0.5 hover:shadow-xl'}`}
+                                            style={{ borderColor: isPlaying ? '#14b8a6' : '#99f6e4' }}>
+                                            <span className="text-4xl shrink-0" style={{ color: '#14b8a6' }}>🔊</span>
+                                            <span style={{ minWidth: 0 }}>
+                                                <span className="block text-2xl font-black text-gray-800">{sentence}</span>
+                                                <span className="block text-sm text-gray-400 font-bold">{english}</span>
+                                            </span>
+                                        </button>
+                                    );
+                                }
                                 return (
-                                    <button key={baseId} onClick={() => playSentence(frame, filler)}
-                                        className={`w-full bg-white rounded-3xl shadow-lg border-b-4 p-5 flex items-center gap-4 text-left transition-all ${isPlaying ? 'scale-95' : 'hover:-translate-y-0.5 hover:shadow-xl'}`}
-                                        style={{ borderColor: isPlaying ? '#14b8a6' : '#99f6e4' }}>
-                                        <span className="text-4xl shrink-0" style={{ color: '#14b8a6' }}>🔊</span>
+                                    <div key={baseId} className="w-full bg-gray-50 rounded-3xl border-b-4 p-5 flex items-center gap-4 text-left opacity-60" style={{ borderColor: '#e5e7eb' }}>
+                                        <span className="text-4xl shrink-0" style={{ color: '#d1d5db' }}>🎙️</span>
                                         <span style={{ minWidth: 0 }}>
-                                            <span className="block text-2xl font-black text-gray-800">{sentence}</span>
-                                            <span className="block text-sm text-gray-400 font-bold">{english}</span>
+                                            <span className="block text-2xl font-black text-gray-400">{sentence}</span>
+                                            <span className="block text-xs text-gray-400 font-bold mt-1">No {langLabel} recording yet</span>
                                         </span>
-                                    </button>
+                                    </div>
                                 );
                             })}
-                            <p className="text-center text-gray-400 text-sm font-bold pt-2">Tap a sentence, listen, then say it out loud! 🗣️</p>
+                            {playable.length > 0 && <p className="text-center text-gray-400 text-sm font-bold pt-2">Tap a sentence, listen, then say it out loud! 🗣️</p>}
                         </div>
                     )}
                 </div>
