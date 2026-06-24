@@ -1299,7 +1299,13 @@
 
         // Generate a short hash of a base64 string for change detection
         const hashString = async (str) => {
-            const bytes = new TextEncoder().encode(str.slice(0, 2000)); // sample first 2KB for speed
+            // Audio clips are sampled (first 2KB) for speed since their headers differ
+            // per recording. Filler images (data URIs) can share long identical headers,
+            // so they are hashed in full — otherwise two different images could collide
+            // and the skip-on-unchanged logic would misfire on re-download.
+            const isImage = typeof str === 'string' && str.indexOf('data:image') === 0;
+            const sample = isImage ? str : str.slice(0, 2000);
+            const bytes = new TextEncoder().encode(sample);
             const buf = await crypto.subtle.digest('SHA-256', bytes);
             return Array.from(new Uint8Array(buf)).slice(0, 6).map(b => b.toString(16).padStart(2,'0')).join('');
         };
@@ -1348,7 +1354,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.0';
+        const APP_VERSION = '2.9.1';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
@@ -1969,7 +1975,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.0</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.1</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
