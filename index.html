@@ -1354,8 +1354,21 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.1';
+        const APP_VERSION = '2.9.2';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
+        // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
+        // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
+        // (e.g. "Dance.gif"); gifUrl turns that into a full URL the browser loads and
+        // caches directly. This keeps the word pack light and downloads fast. Casing
+        // matters: GitHub Pages is case-sensitive, so "Dance.gif" must match exactly.
+        const GIF_BASE = 'https://ssseyon.github.io/Gungbe-Yor/GIFs/';
+        const gifUrl = (name) => {
+            if (!name) return null;
+            const n = String(name).trim();
+            if (!n) return null;
+            if (n.indexOf('http') === 0) return n; // already a full URL
+            return GIF_BASE + n.replace(/^\/+/, '');
+        };
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
         // who reads the page source. It is not real security, just a casual gate.
@@ -1975,7 +1988,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.1</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.2</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2046,24 +2059,6 @@
             const [editFrameForm, setEditFrameForm] = useState({ en: '', yoruba: '', gungbe: '' });
             const [editingFillerId, setEditingFillerId] = useState(null);
             const [editFillerForm, setEditFillerForm] = useState({ en: '', yoruba: '', gungbe: '' });
-            // Map of fillerId -> image data URI, loaded from IndexedDB (not from frames JSON).
-            const [fillerImages, setFillerImages] = useState({});
-
-            // Load all filler images from IndexedDB once frames are known.
-            useEffect(() => {
-                let cancelled = false;
-                (async () => {
-                    const map = {};
-                    for (const frame of (frames || [])) {
-                        for (const filler of frame.fillers) {
-                            const img = await getFillerImage(frame.id, filler.id);
-                            if (img) map[filler.id] = img;
-                        }
-                    }
-                    if (!cancelled) setFillerImages(map);
-                })();
-                return () => { cancelled = true; };
-            }, [frames]);
 
             const genId = () => 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
@@ -2077,28 +2072,19 @@
 
             const deleteFrame = (id) => {
                 if (!window.confirm('Delete this whole phrase and its recordings?')) return;
-                const frame = (frames || []).find(f => f.id === id);
-                if (frame) frame.fillers.forEach(fi => deleteFillerImage(id, fi.id));
                 setFrames(prev => prev.filter(f => f.id !== id));
             };
 
-            const addFiller = async (frameId) => {
+            const addFiller = (frameId) => {
                 const nf = newFiller[frameId] || {};
                 if (!nf.en || !nf.en.trim()) { alert('Enter the English word for the blank.'); return; }
                 const fillerId = genId();
-                const filler = { id: fillerId, en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim() };
-                if (nf.image) {
-                    const small = await processFillerImage(nf.image);
-                    await saveFillerImage(frameId, fillerId, small);
-                    setFillerImages(prev => ({ ...prev, [fillerId]: small }));
-                }
+                const filler = { id: fillerId, en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim(), imageUrl: (nf.imageUrl || '').trim() };
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: [...f.fillers, filler] } : f));
-                setNewFiller(prev => ({ ...prev, [frameId]: { en: '', yoruba: '', gungbe: '', image: null } }));
+                setNewFiller(prev => ({ ...prev, [frameId]: { en: '', yoruba: '', gungbe: '', imageUrl: '' } }));
             };
 
             const deleteFiller = (frameId, fillerId) => {
-                deleteFillerImage(frameId, fillerId);
-                setFillerImages(prev => { const n = { ...prev }; delete n[fillerId]; return n; });
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.filter(x => x.id !== fillerId) } : f));
             };
 
@@ -2116,22 +2102,12 @@
 
             const startEditFiller = (filler) => {
                 setEditingFillerId(filler.id);
-                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '', image: fillerImages[filler.id] || null });
+                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '', imageUrl: filler.imageUrl || '' });
             };
 
-            const saveEditFiller = async (frameId, fillerId) => {
+            const saveEditFiller = (frameId, fillerId) => {
                 if (!editFillerForm.en.trim()) { alert('English word cannot be empty.'); return; }
-                const img = editFillerForm.image;
-                const existing = fillerImages[fillerId] || null;
-                if (img && img !== existing) {
-                    const small = await processFillerImage(img);
-                    await saveFillerImage(frameId, fillerId, small);
-                    setFillerImages(prev => ({ ...prev, [fillerId]: small }));
-                } else if (!img && existing) {
-                    await deleteFillerImage(frameId, fillerId);
-                    setFillerImages(prev => { const n = { ...prev }; delete n[fillerId]; return n; });
-                }
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim() } : x) } : f));
+                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim(), imageUrl: (editFillerForm.imageUrl || '').trim() } : x) } : f));
                 setEditingFillerId(null);
             };
 
@@ -2215,42 +2191,22 @@
                                                             <input value={editFillerForm.gungbe} onChange={e => setEditFillerForm(p => ({ ...p, gungbe: e.target.value }))} placeholder="Gungbe" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '80px' }} />
                                                         </div>
                                                         <div className="space-y-1">
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                <label style={{ cursor: 'pointer' }}>
-                                                                    <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[11px] font-bold">{editFillerForm.image ? 'Change file' : '+ Upload image/GIF'}</span>
-                                                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => setEditFillerForm(p => ({ ...p, image: ev.target.result })); reader.readAsDataURL(file); }} />
-                                                                </label>
-                                                                {editFillerForm.image && <img src={editFillerForm.image} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} />}
-                                                                {editFillerForm.image && <button onClick={() => setEditFillerForm(p => ({ ...p, image: null }))} className="text-red-400 text-xs font-bold">Remove</button>}
-                                                            </div>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                                <input
-                                                                    type="text"
-                                                                    inputMode="text"
-                                                                    placeholder="Or paste a GIF / image URL here"
-                                                                    className="flex-1 p-2 border rounded-lg text-xs"
-                                                                    style={{ minWidth: 0 }}
-                                                                    onPaste={e => {
-                                                                        const items = e.clipboardData && e.clipboardData.items;
-                                                                        if (!items) return;
-                                                                        for (let i = 0; i < items.length; i++) {
-                                                                            if (items[i].type.startsWith('image/')) {
-                                                                                e.preventDefault();
-                                                                                const file = items[i].getAsFile();
-                                                                                if (!file) return;
-                                                                                const reader = new FileReader();
-                                                                                reader.onload = ev => setEditFillerForm(p => ({ ...p, image: ev.target.result }));
-                                                                                reader.readAsDataURL(file);
-                                                                                return;
-                                                                            }
-                                                                        }
-                                                                    }}
-                                                                    onChange={e => {
-                                                                        const val = e.target.value.trim();
-                                                                        if (val.startsWith('http')) setEditFillerForm(p => ({ ...p, image: val }));
-                                                                    }}
-                                                                />
-                                                            </div>
+                                                            <input
+                                                                type="text"
+                                                                inputMode="text"
+                                                                value={editFillerForm.imageUrl || ''}
+                                                                onChange={e => setEditFillerForm(p => ({ ...p, imageUrl: e.target.value }))}
+                                                                placeholder="GIF file name, e.g. Dance.gif"
+                                                                className="w-full p-2 border rounded-lg text-xs"
+                                                            />
+                                                            {editFillerForm.imageUrl && editFillerForm.imageUrl.trim() && (
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    <img src={gifUrl(editFillerForm.imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />
+                                                                    <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl(editFillerForm.imageUrl)}</span>
+                                                                    <button onClick={() => setEditFillerForm(p => ({ ...p, imageUrl: '' }))} className="text-red-400 text-xs font-bold shrink-0">Clear</button>
+                                                                </div>
+                                                            )}
+                                                            <div className="text-[10px] text-gray-400">Upload the GIF to the GitHub GIFs folder, then type its exact file name here (case sensitive).</div>
                                                         </div>
                                                         <div className="flex gap-2">
                                                             <button onClick={() => saveEditFiller(frame.id, filler.id)} className="flex-1 py-1 rounded-lg font-bold text-white text-xs" style={{ background: '#14b8a6' }}>Save</button>
@@ -2259,7 +2215,7 @@
                                                     </div>
                                                 ) : (
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        {fillerImages[filler.id] && <img src={fillerImages[filler.id]} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} />}
+                                                        {filler.imageUrl && <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />}
                                                         <div style={{ flex: 1, minWidth: 0 }}>
                                                             <div className="font-bold text-sm text-gray-800 truncate">{frame.en.includes('___') ? frame.en.replace('___', filler.en) : frame.en + ' ' + filler.en}</div>
                                                             <div className="text-[11px] text-gray-500 truncate">{(frame.yoruba.includes('___') ? frame.yoruba.replace('___', filler.yoruba || '?') : frame.yoruba + ' ' + (filler.yoruba || '?'))} • {(frame.gungbe.includes('___') ? frame.gungbe.replace('___', filler.gungbe || '?') : frame.gungbe + ' ' + (filler.gungbe || '?'))}</div>
@@ -2287,42 +2243,22 @@
                                             <input value={(newFiller[frame.id]||{}).gungbe || ''} onChange={e => setNF(frame.id, 'gungbe', e.target.value)} placeholder="Gungbe" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '90px' }} />
                                         </div>
                                         <div className="space-y-1">
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                <label style={{ cursor: 'pointer' }}>
-                                                    <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[11px] font-bold">{(newFiller[frame.id]||{}).image ? 'Change file' : '+ Upload image/GIF'}</span>
-                                                    <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => setNF(frame.id, 'image', ev.target.result); reader.readAsDataURL(file); }} />
-                                                </label>
-                                                {(newFiller[frame.id]||{}).image && <img src={(newFiller[frame.id]||{}).image} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} />}
-                                                {(newFiller[frame.id]||{}).image && <button onClick={() => setNF(frame.id, 'image', null)} className="text-red-400 text-xs font-bold">Remove</button>}
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <input
-                                                    type="text"
-                                                    inputMode="text"
-                                                    placeholder="Or paste a GIF / image URL here"
-                                                    className="flex-1 p-2 border rounded-lg text-xs"
-                                                    style={{ minWidth: 0 }}
-                                                    onPaste={e => {
-                                                        const items = e.clipboardData && e.clipboardData.items;
-                                                        if (!items) return;
-                                                        for (let i = 0; i < items.length; i++) {
-                                                            if (items[i].type.startsWith('image/')) {
-                                                                e.preventDefault();
-                                                                const file = items[i].getAsFile();
-                                                                if (!file) return;
-                                                                const reader = new FileReader();
-                                                                reader.onload = ev => setNF(frame.id, 'image', ev.target.result);
-                                                                reader.readAsDataURL(file);
-                                                                return;
-                                                            }
-                                                        }
-                                                    }}
-                                                    onChange={e => {
-                                                        const val = e.target.value.trim();
-                                                        if (val.startsWith('http')) setNF(frame.id, 'image', val);
-                                                    }}
-                                                />
-                                            </div>
+                                            <input
+                                                type="text"
+                                                inputMode="text"
+                                                value={(newFiller[frame.id]||{}).imageUrl || ''}
+                                                onChange={e => setNF(frame.id, 'imageUrl', e.target.value)}
+                                                placeholder="GIF file name, e.g. Dance.gif"
+                                                className="w-full p-2 border rounded-lg text-xs"
+                                            />
+                                            {(newFiller[frame.id]||{}).imageUrl && (newFiller[frame.id].imageUrl).trim() && (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <img src={gifUrl((newFiller[frame.id]||{}).imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />
+                                                    <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl((newFiller[frame.id]||{}).imageUrl)}</span>
+                                                    <button onClick={() => setNF(frame.id, 'imageUrl', '')} className="text-red-400 text-xs font-bold shrink-0">Clear</button>
+                                                </div>
+                                            )}
+                                            <div className="text-[10px] text-gray-400">Upload the GIF to the GitHub GIFs folder, then type its exact file name here (case sensitive).</div>
                                         </div>
                                         <button onClick={() => addFiller(frame.id)} className="w-full py-1.5 rounded-lg font-bold text-teal-700 text-xs" style={{ background: '#ccfbf1' }}>+ Add word</button>
                                     </div>
@@ -2917,30 +2853,11 @@
             const [available, setAvailable] = useState(null); // map baseId -> true when a recording exists
             const [playingId, setPlayingId] = useState(null);
             const [cardIndex, setCardIndex] = useState(0);
-            const [images, setImages] = useState({}); // fillerId -> image data URI from IndexedDB
             const [selectedFrameId, setSelectedFrameId] = useState(null); // chosen anchor phrase
             const [shuffleSeed, setShuffleSeed] = useState(0); // re-randomise when a category is opened
             const ppTouchStartX = useRef(null);
             const ppTouchEndX = useRef(null);
             const PP_SWIPE_MIN = 50;
-
-            // Load filler images from IndexedDB (kept out of frames JSON to stay small).
-            useEffect(() => {
-                let cancelled = false;
-                (async () => {
-                    const map = {};
-                    for (const frame of (frames || [])) {
-                        for (const filler of frame.fillers) {
-                            try {
-                                const img = await getFillerImage(frame.id, filler.id);
-                                if (img) map[filler.id] = img;
-                            } catch (e) {}
-                        }
-                    }
-                    if (!cancelled) setImages(map);
-                })();
-                return () => { cancelled = true; };
-            }, [frames]);
 
             useEffect(() => {
                 let cancelled = false;
@@ -3067,8 +2984,8 @@
                             <div>
                                 <div className="text-center text-xs font-bold text-gray-400 mb-3">{frame.en} · {safeIndex + 1} / {allCards.length}</div>
                                 <div className="bg-white rounded-3xl shadow-xl border-b-4 overflow-hidden mb-6" style={{ borderColor: hasAudio ? (isPlaying ? '#14b8a6' : '#99f6e4') : '#e5e7eb' }}>
-                                    {images[filler.id] && (
-                                        <img src={images[filler.id]} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} />
+                                    {filler.imageUrl && (
+                                        <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} onError={e => { e.target.style.display = 'none'; }} />
                                     )}
                                     <div className="p-6 text-center">
                                         <div className="text-3xl font-black text-gray-800 mb-2">{sentence}</div>

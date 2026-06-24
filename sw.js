@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v12';
+const CACHE_NAME = 'little-linguist-v13';
 
 // Local app files to pre-cache on install.
 const LOCAL_ASSETS = [
@@ -87,6 +87,24 @@ self.addEventListener('fetch', (event) => {
         }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
       ]).catch(() => caches.match(request, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // Sentence-frame filler GIFs: cache-first. They live as static files in the
+  // GIFs/ folder on GitHub Pages and never change once uploaded, so the first
+  // fetch is cached and every later view is instant and works offline.
+  if (url.indexOf('/Gungbe-Yor/GIFs/') !== -1) {
+    event.respondWith(
+      caches.match(request).then(cached => {
+        if (cached) return cached;
+        return fetch(request).then(res => {
+          if (res.ok && res.status === 200) {
+            caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
+          }
+          return res;
+        }).catch(() => caches.match(request));
+      })
     );
     return;
   }
