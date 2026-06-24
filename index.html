@@ -1112,6 +1112,73 @@
             });
         };
 
+        // Filler images for sentence frames live in IndexedDB (same store as audio)
+        // keyed sfimg_<frameId>_<fillerId>. They are kept OUT of the frames JSON so
+        // localStorage (5MB cap) and the Firestore frames doc (1MB cap) stay tiny.
+        // Images are compressed hard before saving so the file footprint is minimal.
+        const sfImageKey = (frameId, fillerId) => 'sfimg_' + frameId + '_' + fillerId;
+        const saveFillerImage = async (frameId, fillerId, dataUri) => {
+            await saveAudioBlob(sfImageKey(frameId, fillerId), dataUri);
+        };
+        const getFillerImage = async (frameId, fillerId) => {
+            try { return await getAudioBlob(sfImageKey(frameId, fillerId)); } catch (e) { return null; }
+        };
+        const deleteFillerImage = async (frameId, fillerId) => {
+            try {
+                const db = await initDB();
+                return new Promise((resolve) => {
+                    const tx = db.transaction([STORE_NAME], 'readwrite');
+                    tx.objectStore(STORE_NAME).delete(sfImageKey(frameId, fillerId));
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => resolve();
+                });
+            } catch (e) {}
+        };
+
+        // Compress an image/GIF data URI down to a small static thumbnail. For GIFs
+        // this drops animation (first frame only) which is the right trade for a
+        // tiny, syncable footprint. Max dimension is kept low and JPEG quality modest.
+        const compressImageDataUri = (dataUri, maxDim, quality, keepPng) => {
+            return new Promise((resolve) => {
+                try {
+                    const img = new Image();
+                    img.onload = () => {
+                        let w = img.naturalWidth || img.width;
+                        let h = img.naturalHeight || img.height;
+                        if (!w || !h) { resolve(dataUri); return; }
+                        const md = maxDim || 200;
+                        if (w > h && w > md) { h = Math.round(h * md / w); w = md; }
+                        else if (h >= w && h > md) { w = Math.round(w * md / h); h = md; }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w; canvas.height = h;
+                        const ctx = canvas.getContext('2d');
+                        if (!keepPng) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); }
+                        ctx.drawImage(img, 0, 0, w, h);
+                        try { resolve(keepPng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', quality || 0.6)); }
+                        catch (e) { resolve(dataUri); }
+                    };
+                    img.onerror = () => resolve(dataUri);
+                    img.src = dataUri;
+                } catch (e) { resolve(dataUri); }
+            });
+        };
+
+        // Smart handler for sentence-frame filler images.
+        // GIFs are kept byte-for-byte so the animation survives (canvas would flatten
+        // them to a single frame). Static images are resized to a generous max
+        // dimension at high quality, so they stay sharp but do not bloat storage.
+        // A remote http(s) URL is kept as-is (no bytes to store).
+        const processFillerImage = async (dataUri) => {
+            if (!dataUri) return null;
+            if (dataUri.indexOf('data:') !== 0) return dataUri; // remote URL, keep as link
+            if (dataUri.indexOf('data:image/gif') === 0) return dataUri; // keep GIF animated
+            // Static image: resize at high quality for good clarity. PNGs keep alpha
+            // (transparent background) as PNG; everything else becomes a compact JPEG.
+            const isPng = dataUri.indexOf('data:image/png') === 0;
+            try { return await compressImageDataUri(dataUri, 512, 0.82, isPng); }
+            catch (e) { return dataUri; }
+        };
+
         const getAllAudioEntries = async () => {
             const db = await initDB();
             return new Promise((resolve, reject) => {
@@ -1275,7 +1342,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.8.7';
+        const APP_VERSION = '2.8.9';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
@@ -1373,7 +1440,13 @@
             // image/attachment part of Settings. Deliberately NOT persisted, so it resets
             // when the app restarts. Note: in a static file a passphrase only gates the
             // UI; it is not real security against someone reading the source.
-            const [isAdmin, setIsAdmin] = useState(false);
+            const [isAdmin, setIsAdminRaw] = useState(() => {
+                try { return localStorage.getItem('ll_admin_v1') === '1'; } catch (e) { return false; }
+            });
+            const setIsAdmin = (val) => {
+                setIsAdminRaw(val);
+                try { if (val) localStorage.setItem('ll_admin_v1', '1'); else localStorage.removeItem('ll_admin_v1'); } catch (e) {}
+            };
             const [updateAvailable, setUpdateAvailable] = useState(null);
             const [appUpdate, setAppUpdate] = useState(null); // newer app (code) version available
             const [updateLoading, setUpdateLoading] = useState(false);
@@ -1890,7 +1963,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.7</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.9</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1953,7 +2026,7 @@
         // Parent Zone authoring for sentence frames. Each frame is a template with a
         // small set of fillers; each filler gets a full-sentence recording per language
         // through the same VoiceRecorder used for words (keyed sf_<frameId>_<fillerId>).
-        const PhraseManager = ({ frames, setFrames, playAudio, clearCache }) => {
+        const PhraseManager = ({ frames, setFrames, playAudio, clearCache, isAdmin }) => {
             const [expandedId, setExpandedId] = useState(null);
             const [newFrame, setNewFrame] = useState({ en: '', yoruba: '', gungbe: '' });
             const [newFiller, setNewFiller] = useState({});
@@ -1961,6 +2034,24 @@
             const [editFrameForm, setEditFrameForm] = useState({ en: '', yoruba: '', gungbe: '' });
             const [editingFillerId, setEditingFillerId] = useState(null);
             const [editFillerForm, setEditFillerForm] = useState({ en: '', yoruba: '', gungbe: '' });
+            // Map of fillerId -> image data URI, loaded from IndexedDB (not from frames JSON).
+            const [fillerImages, setFillerImages] = useState({});
+
+            // Load all filler images from IndexedDB once frames are known.
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    const map = {};
+                    for (const frame of (frames || [])) {
+                        for (const filler of frame.fillers) {
+                            const img = await getFillerImage(frame.id, filler.id);
+                            if (img) map[filler.id] = img;
+                        }
+                    }
+                    if (!cancelled) setFillerImages(map);
+                })();
+                return () => { cancelled = true; };
+            }, [frames]);
 
             const genId = () => 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
@@ -1974,18 +2065,28 @@
 
             const deleteFrame = (id) => {
                 if (!window.confirm('Delete this whole phrase and its recordings?')) return;
+                const frame = (frames || []).find(f => f.id === id);
+                if (frame) frame.fillers.forEach(fi => deleteFillerImage(id, fi.id));
                 setFrames(prev => prev.filter(f => f.id !== id));
             };
 
-            const addFiller = (frameId) => {
+            const addFiller = async (frameId) => {
                 const nf = newFiller[frameId] || {};
                 if (!nf.en || !nf.en.trim()) { alert('Enter the English word for the blank.'); return; }
-                const filler = { id: genId(), en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim(), image: nf.image || null };
+                const fillerId = genId();
+                const filler = { id: fillerId, en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim() };
+                if (nf.image) {
+                    const small = await processFillerImage(nf.image);
+                    await saveFillerImage(frameId, fillerId, small);
+                    setFillerImages(prev => ({ ...prev, [fillerId]: small }));
+                }
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: [...f.fillers, filler] } : f));
                 setNewFiller(prev => ({ ...prev, [frameId]: { en: '', yoruba: '', gungbe: '', image: null } }));
             };
 
             const deleteFiller = (frameId, fillerId) => {
+                deleteFillerImage(frameId, fillerId);
+                setFillerImages(prev => { const n = { ...prev }; delete n[fillerId]; return n; });
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.filter(x => x.id !== fillerId) } : f));
             };
 
@@ -2003,12 +2104,22 @@
 
             const startEditFiller = (filler) => {
                 setEditingFillerId(filler.id);
-                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '', image: filler.image || null });
+                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '', image: fillerImages[filler.id] || null });
             };
 
-            const saveEditFiller = (frameId, fillerId) => {
+            const saveEditFiller = async (frameId, fillerId) => {
                 if (!editFillerForm.en.trim()) { alert('English word cannot be empty.'); return; }
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim(), image: editFillerForm.image || null } : x) } : f));
+                const img = editFillerForm.image;
+                const existing = fillerImages[fillerId] || null;
+                if (img && img !== existing) {
+                    const small = await processFillerImage(img);
+                    await saveFillerImage(frameId, fillerId, small);
+                    setFillerImages(prev => ({ ...prev, [fillerId]: small }));
+                } else if (!img && existing) {
+                    await deleteFillerImage(frameId, fillerId);
+                    setFillerImages(prev => { const n = { ...prev }; delete n[fillerId]; return n; });
+                }
+                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim() } : x) } : f));
                 setEditingFillerId(null);
             };
 
@@ -2022,6 +2133,7 @@
                         Build short sentence frames like "I want ___". Add a few words for the blank, then record yourself saying each FULL sentence in Yoruba and Gungbe. The child taps a sentence, hears it, and repeats.
                     </div>
 
+                    {isAdmin && (
                     <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100 space-y-2">
                         <div className="font-black text-gray-700 text-sm">New phrase</div>
                         <input value={newFrame.en} onChange={e => setNewFrame(p => ({ ...p, en: e.target.value }))} placeholder="English, e.g. I want ___" className="w-full p-2 border rounded-lg text-sm" />
@@ -2029,6 +2141,7 @@
                         <input value={newFrame.gungbe} onChange={e => setNewFrame(p => ({ ...p, gungbe: e.target.value }))} placeholder="Gungbe frame (use ___ for the blank)" className="w-full p-2 border rounded-lg text-sm" />
                         <button onClick={addFrame} className="w-full py-2 rounded-lg font-bold text-white text-sm" style={{ background: '#14b8a6' }}>Add phrase</button>
                     </div>
+                    )}
 
                     {frames.length === 0 && (
                         <div className="text-center text-gray-400 text-sm py-6">No phrases yet. Add one above.</div>
@@ -2052,14 +2165,14 @@
                                 </button>
                                 <div className="flex gap-1 shrink-0">
                                     <button onClick={() => { setExpandedId(expandedId === frame.id ? null : frame.id); setEditingFrameId(null); setEditingFillerId(null); }} className="text-gray-400 p-2 hover:bg-gray-100 rounded font-black" style={{ fontFamily: 'sans-serif', fontSize: '14px' }}>{expandedId === frame.id ? '▲' : '▼'}</button>
-                                    <button onClick={() => deleteFrame(frame.id)} className="text-red-400 p-2 hover:bg-red-50 rounded"><Icon name="Trash2" size={16}/></button>
+                                    {isAdmin && <button onClick={() => deleteFrame(frame.id)} className="text-red-400 p-2 hover:bg-red-50 rounded"><Icon name="Trash2" size={16}/></button>}
                                 </div>
                             </div>
 
                             {expandedId === frame.id && (
                                 <div className="px-3 pb-3 space-y-2 border-t border-gray-100 pt-3">
 
-                                    {editingFrameId !== frame.id && (
+                                    {isAdmin && editingFrameId !== frame.id && (
                                         <button onClick={() => startEditFrame(frame)} className="w-full py-1.5 rounded-lg font-bold text-teal-700 text-xs flex items-center justify-center gap-1" style={{ background: '#ccfbf1' }}>
                                             <Icon name="Edit" size={13}/> Edit phrase text
                                         </button>
@@ -2134,23 +2247,26 @@
                                                     </div>
                                                 ) : (
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        {filler.image && <img src={filler.image} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} />}
+                                                        {fillerImages[filler.id] && <img src={fillerImages[filler.id]} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} />}
                                                         <div style={{ flex: 1, minWidth: 0 }}>
                                                             <div className="font-bold text-sm text-gray-800 truncate">{frame.en.includes('___') ? frame.en.replace('___', filler.en) : frame.en + ' ' + filler.en}</div>
                                                             <div className="text-[11px] text-gray-500 truncate">{(frame.yoruba.includes('___') ? frame.yoruba.replace('___', filler.yoruba || '?') : frame.yoruba + ' ' + (filler.yoruba || '?'))} • {(frame.gungbe.includes('___') ? frame.gungbe.replace('___', filler.gungbe || '?') : frame.gungbe + ' ' + (filler.gungbe || '?'))}</div>
                                                         </div>
+                                                        {isAdmin && (
                                                         <div className="flex gap-1 items-center" style={{ marginLeft: 'auto' }}>
                                                             <button onClick={() => startEditFiller(filler)} className="text-teal-500 p-1 hover:bg-teal-50 rounded" title="Edit word"><Icon name="Edit" size={14}/></button>
                                                             <VoiceRecorder wordId={baseId} lang="yoruba" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'yoruba')} label="Y"/>
                                                             <VoiceRecorder wordId={baseId} lang="gungbe" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'gungbe')} label="G"/>
                                                             <button onClick={() => deleteFiller(frame.id, filler.id)} className="text-red-400 p-1 hover:bg-red-50 rounded"><Icon name="X" size={16}/></button>
                                                         </div>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
                                         );
                                     })}
 
+                                    {isAdmin && (
                                     <div className="bg-white border border-dashed border-gray-200 rounded-xl p-2 space-y-1">
                                         <div className="text-[11px] font-bold text-gray-500">Add a word for the blank</div>
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -2198,6 +2314,7 @@
                                         </div>
                                         <button onClick={() => addFiller(frame.id)} className="w-full py-1.5 rounded-lg font-bold text-teal-700 text-xs" style={{ background: '#ccfbf1' }}>+ Add word</button>
                                     </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -2207,11 +2324,11 @@
         };
 
         const ParentManager = ({ words, setWords, frames, setFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
-            const [view, setView] = useState(isAdmin ? 'words' : 'stats');
+            const [view, setView] = useState('words');
             const [passInput, setPassInput] = useState('');
-            const ADMIN_VIEWS = ['words', 'phrases', 'stories'];
-            // If an admin-only view is somehow selected without admin, bounce to stats.
-            useEffect(() => { if (!isAdmin && ADMIN_VIEWS.includes(view)) setView('stats'); }, [isAdmin, view]);
+            const ADMIN_VIEWS = ['stories'];
+            // If an admin-only view is somehow selected without admin, bounce to words.
+            useEffect(() => { if (!isAdmin && ADMIN_VIEWS.includes(view)) setView('words'); }, [isAdmin, view]);
             const [pullMsg, setPullMsg] = useState('');
             const [checkMsg, setCheckMsg] = useState('');
             const [checking, setChecking] = useState(false);
@@ -2490,15 +2607,15 @@
                         <h1 className="text-xl font-black text-gray-700">Parent Zone 🛠️</h1>
                     </div>
                     <div className="flex gap-1 mb-4 bg-white p-1.5 rounded-xl shadow-sm">
-                        {isAdmin && <button onClick={() => setView('words')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'words' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`}>Words</button>}
-                        {isAdmin && <button onClick={() => setView('phrases')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'phrases' ? 'bg-teal-100 text-teal-700' : 'text-gray-500'}`}>Phrases</button>}
+                        <button onClick={() => setView('words')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'words' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`}>Words</button>
+                        <button onClick={() => setView('phrases')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'phrases' ? 'bg-teal-100 text-teal-700' : 'text-gray-500'}`}>Phrases</button>
                         {isAdmin && <button onClick={() => setView('stories')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'stories' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500'}`}>Stories</button>}
                         <button onClick={() => setView('stats')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'stats' ? 'bg-purple-100 text-purple-700' : 'text-gray-500'}`}>Stats</button>
                         <button onClick={() => setView('settings')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'settings' ? 'bg-gray-100 text-gray-700' : 'text-gray-500'}`}>Settings</button>
                     </div>
 
                     {view === 'phrases' && (
-                        <PhraseManager frames={frames} setFrames={setFrames} playAudio={playAudio} clearCache={clearCache} />
+                        <PhraseManager frames={frames} setFrames={setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} />
                     )}
 
                     {view === 'settings' && (
@@ -2667,6 +2784,7 @@
                     )}
                     {view === 'words' && (
                         <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100 animate-pop">
+                            {isAdmin && (
                             <div id="edit-form" className="grid grid-cols-6 gap-2 mb-4 bg-gray-50 p-2 rounded-lg">
                                 <input placeholder="Icon" value={newWord.icon} onChange={e => setNewWord({...newWord, icon: e.target.value})} className="p-2 rounded border w-full text-center" />
                                 <input placeholder="English" value={newWord.english} onChange={e => setNewWord({...newWord, english: e.target.value})} className="p-2 rounded border w-full" />
@@ -2675,6 +2793,7 @@
                                 <select value={newWord.category} onChange={e => setNewWord({...newWord, category: e.target.value})} className="p-2 rounded border w-full">{categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}</select>
                                 <button onClick={handleAddWord} className="bg-green-500 text-white rounded font-bold p-2 hover:bg-green-600">Add</button>
                             </div>
+                            )}
                             <input type="text" placeholder="Search..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full p-2 border rounded-lg mb-2" />
                             <div className="flex gap-2 overflow-x-auto pb-2 mb-2 no-scrollbar">{categories.map(cat => <button key={cat} onClick={() => setFilter(cat)} className={`px-3 py-1 rounded-full text-xs font-bold ${filter === cat ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'}`}>{cat}</button>)}</div>
                             <div className="space-y-2">
@@ -2708,7 +2827,7 @@
                                                 </div>
                                             </div>
                                             <div className="flex gap-2 shrink-0" style={{ marginLeft: 'auto' }}>
-                                                 {!isDeleting && (
+                                                 {isAdmin && !isDeleting && (
                                                      <>
                                                         <VoiceRecorder wordId={word.id} lang="yoruba" textToSpeak={word.yoruba} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'yoruba')} label="Y"/>
                                                         <VoiceRecorder wordId={word.id} lang="gungbe" textToSpeak={word.gungbe} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'gungbe')} label="G"/>
@@ -2716,7 +2835,7 @@
                                                         <button onClick={() => requestDelete(word.id)} className="text-red-400 p-2 hover:bg-red-50 rounded"><Icon name="Trash2" size={16}/></button>
                                                      </>
                                                  )}
-                                                 {isDeleting && (
+                                                 {isAdmin && isDeleting && (
                                                      <div className="flex items-center gap-2 bg-red-50 px-2 rounded">
                                                          <span className="text-xs font-bold text-red-500">Delete?</span>
                                                          <button onClick={() => confirmDelete(word.id)} className="text-green-600 p-1 hover:bg-green-100 rounded"><Icon name="Check" size={16}/></button>
@@ -2784,9 +2903,28 @@
             const [available, setAvailable] = useState(null); // map baseId -> true when a recording exists
             const [playingId, setPlayingId] = useState(null);
             const [cardIndex, setCardIndex] = useState(0);
+            const [images, setImages] = useState({}); // fillerId -> image data URI from IndexedDB
             const ppTouchStartX = useRef(null);
             const ppTouchEndX = useRef(null);
             const PP_SWIPE_MIN = 50;
+
+            // Load filler images from IndexedDB (kept out of frames JSON to stay small).
+            useEffect(() => {
+                let cancelled = false;
+                (async () => {
+                    const map = {};
+                    for (const frame of (frames || [])) {
+                        for (const filler of frame.fillers) {
+                            try {
+                                const img = await getFillerImage(frame.id, filler.id);
+                                if (img) map[filler.id] = img;
+                            } catch (e) {}
+                        }
+                    }
+                    if (!cancelled) setImages(map);
+                })();
+                return () => { cancelled = true; };
+            }, [frames]);
 
             useEffect(() => {
                 let cancelled = false;
@@ -2865,8 +3003,8 @@
                             <div>
                                 <div className="text-center text-xs font-bold text-gray-400 mb-3">{safeIndex + 1} / {allCards.length}</div>
                                 <div className="bg-white rounded-3xl shadow-xl border-b-4 overflow-hidden mb-6" style={{ borderColor: hasAudio ? (isPlaying ? '#14b8a6' : '#99f6e4') : '#e5e7eb' }}>
-                                    {filler.image && (
-                                        <img src={filler.image} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} />
+                                    {images[filler.id] && (
+                                        <img src={images[filler.id]} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} />
                                     )}
                                     <div className="p-6 text-center">
                                         <div className="text-3xl font-black text-gray-800 mb-2">{sentence}</div>
