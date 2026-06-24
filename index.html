@@ -1314,22 +1314,28 @@
             if (keys.length === 0) return {};
             const db = await initDB();
             const blobs = {};
-            // Convert all base64 strings to blobs first (synchronous, no IDB yet).
-            // Skip any entry that fails to decode so corrupt 0-byte blobs are never
-            // written into IndexedDB.
+            const strings = {};
+            // Audio entries become Blobs. Filler images (sfimg_ keys) are kept as their
+            // original data URI string, because the image render path and getFillerImage
+            // expect a string, not a Blob. Skip any audio entry that fails to decode so
+            // corrupt 0-byte blobs are never written into IndexedDB.
             for (const key of keys) {
+                if (key.indexOf('sfimg_') === 0) {
+                    if (typeof entries[key].data === 'string' && entries[key].data) strings[key] = entries[key].data;
+                    continue;
+                }
                 const blob = base64ToBlob(entries[key].data);
                 if (blob) blobs[key] = blob;
             }
-            const validKeys = Object.keys(blobs);
-            if (validKeys.length === 0) return {};
-            // Write all valid blobs in a single readwrite transaction
+            const blobKeys = Object.keys(blobs);
+            const strKeys = Object.keys(strings);
+            if (blobKeys.length === 0 && strKeys.length === 0) return {};
+            // Write all valid entries in a single readwrite transaction
             await new Promise((resolve, reject) => {
                 const tx = db.transaction([STORE_NAME], 'readwrite');
                 const store = tx.objectStore(STORE_NAME);
-                for (const key of validKeys) {
-                    store.put(blobs[key], key);
-                }
+                for (const key of blobKeys) store.put(blobs[key], key);
+                for (const key of strKeys) store.put(strings[key], key);
                 tx.oncomplete = resolve;
                 tx.onerror = (e) => reject(e.target.error);
                 tx.onabort = (e) => reject(e.target.error);
@@ -1342,7 +1348,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.8.9';
+        const APP_VERSION = '2.9.0';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
@@ -1963,7 +1969,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.9</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.0</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2419,8 +2425,10 @@
                 try {
                     const audioEntries = await getAllAudioEntries();
                     const audioWithHashes = {};
-                    for (const [key, blob] of Object.entries(audioEntries)) {
-                        const base64 = await blobToBase64(blob);
+                    for (const [key, val] of Object.entries(audioEntries)) {
+                        // Audio clips are Blobs; filler images (sfimg_ keys) are stored as
+                        // data URI strings. Only Blobs need FileReader conversion.
+                        const base64 = (typeof val === 'string') ? val : await blobToBase64(val);
                         const hash = await hashString(base64);
                         audioWithHashes[key] = { data: base64, hash };
                     }
@@ -2904,6 +2912,8 @@
             const [playingId, setPlayingId] = useState(null);
             const [cardIndex, setCardIndex] = useState(0);
             const [images, setImages] = useState({}); // fillerId -> image data URI from IndexedDB
+            const [selectedFrameId, setSelectedFrameId] = useState(null); // chosen anchor phrase
+            const [shuffleSeed, setShuffleSeed] = useState(0); // re-randomise when a category is opened
             const ppTouchStartX = useRef(null);
             const ppTouchEndX = useRef(null);
             const PP_SWIPE_MIN = 50;
@@ -2952,17 +2962,48 @@
             };
 
             const langLabel = lang === 'yoruba' ? 'Yoruba' : 'Gungbe';
-            const allCards = [];
-            (frames || []).forEach(frame => {
+            const fillSentence = (frameText, fillerText) => frameText.includes('___') ? frameText.replace('___', fillerText) : frameText + ' ' + fillerText;
+
+            // Anchor phrases (categories) are the frames themselves. Each holds a count
+            // of recorded sentences in the current language for a quick badge.
+            const anchorPhrases = (frames || []).map(frame => {
+                let recorded = 0;
                 frame.fillers.forEach(filler => {
                     const baseId = 'sf_' + frame.id + '_' + filler.id;
-                    allCards.push({ frame, filler, baseId, hasAudio: !!(available && available[baseId]) });
+                    if (available && available[baseId]) recorded++;
                 });
-            });
+                return { frame, total: frame.fillers.length, recorded };
+            }).filter(a => a.total > 0);
+
+            const selectedFrame = (frames || []).find(f => f.id === selectedFrameId) || null;
+
+            // Build the deck for the chosen anchor phrase, shuffled (Fisher-Yates) so the
+            // order differs from how they were authored. shuffleSeed forces a fresh order
+            // each time a category is opened.
+            const shuffle = (arr, seed) => {
+                const a = arr.slice();
+                let s = seed || 1;
+                const rand = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+                for (let i = a.length - 1; i > 0; i--) {
+                    const j = Math.floor(rand() * (i + 1));
+                    const t = a[i]; a[i] = a[j]; a[j] = t;
+                }
+                return a;
+            };
+            const allCards = selectedFrame ? shuffle(selectedFrame.fillers.map(filler => {
+                const baseId = 'sf_' + selectedFrame.id + '_' + filler.id;
+                return { frame: selectedFrame, filler, baseId, hasAudio: !!(available && available[baseId]) };
+            }), shuffleSeed + selectedFrame.fillers.length) : [];
             const playable = allCards.filter(card => card.hasAudio);
             const safeIndex = allCards.length > 0 ? Math.min(cardIndex, allCards.length - 1) : 0;
             const current = allCards[safeIndex] || null;
-            const fillSentence = (frameText, fillerText) => frameText.includes('___') ? frameText.replace('___', fillerText) : frameText + ' ' + fillerText;
+
+            const openCategory = (frameId) => {
+                setSelectedFrameId(frameId);
+                setCardIndex(0);
+                setShuffleSeed(Math.floor(Math.random() * 100000) + 1);
+            };
+            const backToCategories = () => { setSelectedFrameId(null); setCardIndex(0); };
 
             const ppOnTouchStart = (e) => { ppTouchEndX.current = null; ppTouchStartX.current = e.targetTouches[0].clientX; };
             const ppOnTouchMove = (e) => { ppTouchEndX.current = e.targetTouches[0].clientX; };
@@ -2977,7 +3018,7 @@
                 <div className="p-4 max-w-3xl mx-auto animate-pop touch-pan-y"
                     onTouchStart={ppOnTouchStart} onTouchMove={ppOnTouchMove} onTouchEnd={ppOnTouchEnd}>
                     <div className="flex items-center gap-3 mb-4">
-                        <button onClick={onBack} className="bg-white px-4 h-12 rounded-full shadow text-gray-600 font-bold text-base flex items-center">← Back</button>
+                        <button onClick={selectedFrame ? backToCategories : onBack} className="bg-white px-4 h-12 rounded-full shadow text-gray-600 font-bold text-base flex items-center">← Back</button>
                         <button onClick={onHome || onBack} className="bg-white p-3 rounded-full shadow text-2xl">🏠</button>
                         <h2 className="text-2xl font-black text-gray-700">Say a Sentence 💬</h2>
                     </div>
@@ -2986,7 +3027,7 @@
                         <div className="text-center text-gray-400 py-12 font-bold">Loading…</div>
                     )}
 
-                    {available !== null && allCards.length === 0 && (
+                    {available !== null && anchorPhrases.length === 0 && (
                         <div className="flex flex-col items-center justify-center py-16 text-center">
                             <div className="text-6xl mb-4">🎙️</div>
                             <p className="text-xl font-bold text-gray-500 mb-2">No sentences yet</p>
@@ -2994,14 +3035,31 @@
                         </div>
                     )}
 
-                    {available !== null && allCards.length > 0 && current && (() => {
+                    {available !== null && anchorPhrases.length > 0 && !selectedFrame && (
+                        <div className="space-y-3">
+                            <p className="text-center text-gray-400 text-sm font-bold mb-2">Pick a phrase to practise 👇</p>
+                            {anchorPhrases.map(({ frame, total, recorded }) => (
+                                <button key={frame.id} onClick={() => openCategory(frame.id)}
+                                    className="w-full bg-white rounded-3xl shadow-lg border-b-4 p-5 flex items-center justify-between text-left transition-all hover:-translate-y-0.5 hover:shadow-xl"
+                                    style={{ borderColor: '#99f6e4' }}>
+                                    <span style={{ minWidth: 0 }}>
+                                        <span className="block text-2xl font-black text-gray-800">{frame.en}</span>
+                                        <span className="block text-sm font-bold mt-0.5" style={{ color: '#14b8a6' }}>{(lang === 'yoruba' ? frame.yoruba : frame.gungbe)}</span>
+                                    </span>
+                                    <span className="text-xs font-black rounded-full px-3 py-1 shrink-0" style={{ background: '#ccfbf1', color: '#0d9488' }}>{total}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {available !== null && selectedFrame && allCards.length > 0 && current && (() => {
                         const { frame, filler, baseId, hasAudio } = current;
                         const sentence = fillSentence(lang === 'yoruba' ? frame.yoruba : frame.gungbe, (lang === 'yoruba' ? filler.yoruba : filler.gungbe) || filler.en);
                         const english = fillSentence(frame.en, filler.en);
                         const isPlaying = playingId === baseId;
                         return (
                             <div>
-                                <div className="text-center text-xs font-bold text-gray-400 mb-3">{safeIndex + 1} / {allCards.length}</div>
+                                <div className="text-center text-xs font-bold text-gray-400 mb-3">{frame.en} · {safeIndex + 1} / {allCards.length}</div>
                                 <div className="bg-white rounded-3xl shadow-xl border-b-4 overflow-hidden mb-6" style={{ borderColor: hasAudio ? (isPlaying ? '#14b8a6' : '#99f6e4') : '#e5e7eb' }}>
                                     {images[filler.id] && (
                                         <img src={images[filler.id]} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} />
