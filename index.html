@@ -1275,7 +1275,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.8.4';
+        const APP_VERSION = '2.8.5';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
@@ -1890,7 +1890,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.4</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.8.5</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -1980,9 +1980,9 @@
             const addFiller = (frameId) => {
                 const nf = newFiller[frameId] || {};
                 if (!nf.en || !nf.en.trim()) { alert('Enter the English word for the blank.'); return; }
-                const filler = { id: genId(), en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim() };
+                const filler = { id: genId(), en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim(), image: nf.image || null };
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: [...f.fillers, filler] } : f));
-                setNewFiller(prev => ({ ...prev, [frameId]: { en: '', yoruba: '', gungbe: '' } }));
+                setNewFiller(prev => ({ ...prev, [frameId]: { en: '', yoruba: '', gungbe: '', image: null } }));
             };
 
             const deleteFiller = (frameId, fillerId) => {
@@ -2003,12 +2003,12 @@
 
             const startEditFiller = (filler) => {
                 setEditingFillerId(filler.id);
-                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '' });
+                setEditFillerForm({ en: filler.en, yoruba: filler.yoruba || '', gungbe: filler.gungbe || '', image: filler.image || null });
             };
 
             const saveEditFiller = (frameId, fillerId) => {
                 if (!editFillerForm.en.trim()) { alert('English word cannot be empty.'); return; }
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim() } : x) } : f));
+                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim(), image: editFillerForm.image || null } : x) } : f));
                 setEditingFillerId(null);
             };
 
@@ -2089,14 +2089,23 @@
                                                             <input value={editFillerForm.yoruba} onChange={e => setEditFillerForm(p => ({ ...p, yoruba: e.target.value }))} placeholder="Yoruba" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '80px' }} />
                                                             <input value={editFillerForm.gungbe} onChange={e => setEditFillerForm(p => ({ ...p, gungbe: e.target.value }))} placeholder="Gungbe" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '80px' }} />
                                                         </div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            <label className="text-[11px] font-bold text-gray-500" style={{ cursor: 'pointer' }}>
+                                                                <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[11px] font-bold">{editFillerForm.image ? 'Change image' : '+ Add image'}</span>
+                                                                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => setEditFillerForm(p => ({ ...p, image: ev.target.result })); reader.readAsDataURL(file); }} />
+                                                            </label>
+                                                            {editFillerForm.image && <img src={editFillerForm.image} alt="" style={{ width: '36px', height: '36px', objectFit: 'cover', borderRadius: '6px' }} />}
+                                                            {editFillerForm.image && <button onClick={() => setEditFillerForm(p => ({ ...p, image: null }))} className="text-red-400 text-xs">Remove</button>}
+                                                        </div>
                                                         <div className="flex gap-2">
                                                             <button onClick={() => saveEditFiller(frame.id, filler.id)} className="flex-1 py-1 rounded-lg font-bold text-white text-xs" style={{ background: '#14b8a6' }}>Save</button>
                                                             <button onClick={() => setEditingFillerId(null)} className="flex-1 py-1 rounded-lg font-bold text-gray-600 text-xs bg-gray-100">Cancel</button>
                                                         </div>
                                                     </div>
                                                 ) : (
-                                                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                                                        <div style={{ flex: '1 1 45%', minWidth: '120px' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        {filler.image && <img src={filler.image} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} />}
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
                                                             <div className="font-bold text-sm text-gray-800 truncate">{frame.en.replace('___', filler.en)}</div>
                                                             <div className="text-[11px] text-gray-500 truncate">{frame.yoruba.replace('___', filler.yoruba || '?')} • {frame.gungbe.replace('___', filler.gungbe || '?')}</div>
                                                         </div>
@@ -2118,6 +2127,14 @@
                                             <input value={(newFiller[frame.id]||{}).en || ''} onChange={e => setNF(frame.id, 'en', e.target.value)} placeholder="English" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '90px' }} />
                                             <input value={(newFiller[frame.id]||{}).yoruba || ''} onChange={e => setNF(frame.id, 'yoruba', e.target.value)} placeholder="Yoruba" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '90px' }} />
                                             <input value={(newFiller[frame.id]||{}).gungbe || ''} onChange={e => setNF(frame.id, 'gungbe', e.target.value)} placeholder="Gungbe" className="p-2 border rounded-lg text-sm" style={{ flex: '1 1 30%', minWidth: '90px' }} />
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <label style={{ cursor: 'pointer' }}>
+                                                <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[11px] font-bold">{(newFiller[frame.id]||{}).image ? 'Change image' : '+ Add image (optional)'}</span>
+                                                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = ev => setNF(frame.id, 'image', ev.target.result); reader.readAsDataURL(file); }} />
+                                            </label>
+                                            {(newFiller[frame.id]||{}).image && <img src={(newFiller[frame.id]||{}).image} alt="" style={{ width: '36px', height: '36px', objectFit: 'cover', borderRadius: '6px' }} />}
+                                            {(newFiller[frame.id]||{}).image && <button onClick={() => setNF(frame.id, 'image', null)} className="text-red-400 text-xs">Remove</button>}
                                         </div>
                                         <button onClick={() => addFiller(frame.id)} className="w-full py-1.5 rounded-lg font-bold text-teal-700 text-xs" style={{ background: '#ccfbf1' }}>+ Add word</button>
                                     </div>
@@ -2412,12 +2429,12 @@
                         <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 transition-all">🏠</button>
                         <h1 className="text-xl font-black text-gray-700">Parent Zone 🛠️</h1>
                     </div>
-                    <div className="flex gap-2 mb-4 bg-white p-2 rounded-xl shadow-sm" style={{ flexWrap: 'wrap' }}>
-                        {isAdmin && <button onClick={() => setView('words')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'words' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`} style={{ minWidth: '80px' }}>Words</button>}
-                        {isAdmin && <button onClick={() => setView('phrases')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'phrases' ? 'bg-teal-100 text-teal-700' : 'text-gray-500'}`} style={{ minWidth: '80px' }}>Phrases</button>}
-                        <button onClick={() => setView('stats')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'stats' ? 'bg-purple-100 text-purple-700' : 'text-gray-500'}`} style={{ minWidth: '80px' }}>Stats</button>
-                        <button onClick={() => setView('settings')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'settings' ? 'bg-gray-100 text-gray-700' : 'text-gray-500'}`} style={{ minWidth: '80px' }}>Settings</button>
-                        {isAdmin && <button onClick={() => setView('stories')} className={`flex-1 py-2 rounded-lg font-bold ${view === 'stories' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500'}`} style={{ minWidth: '80px' }}>Stories</button>}
+                    <div className="flex gap-1 mb-4 bg-white p-1.5 rounded-xl shadow-sm">
+                        {isAdmin && <button onClick={() => setView('words')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'words' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`}>Words</button>}
+                        {isAdmin && <button onClick={() => setView('phrases')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'phrases' ? 'bg-teal-100 text-teal-700' : 'text-gray-500'}`}>Phrases</button>}
+                        {isAdmin && <button onClick={() => setView('stories')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'stories' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500'}`}>Stories</button>}
+                        <button onClick={() => setView('stats')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'stats' ? 'bg-purple-100 text-purple-700' : 'text-gray-500'}`}>Stats</button>
+                        <button onClick={() => setView('settings')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'settings' ? 'bg-gray-100 text-gray-700' : 'text-gray-500'}`}>Settings</button>
                     </div>
 
                     {view === 'phrases' && (
@@ -2771,22 +2788,29 @@
                                 if (hasAudio) {
                                     return (
                                         <button key={baseId} onClick={() => playSentence(frame, filler)}
-                                            className={`w-full bg-white rounded-3xl shadow-lg border-b-4 p-5 flex items-center gap-4 text-left transition-all ${isPlaying ? 'scale-95' : 'hover:-translate-y-0.5 hover:shadow-xl'}`}
+                                            className={`w-full bg-white rounded-3xl shadow-lg border-b-4 p-4 flex items-center gap-3 text-left transition-all ${isPlaying ? 'scale-95' : 'hover:-translate-y-0.5 hover:shadow-xl'}`}
                                             style={{ borderColor: isPlaying ? '#14b8a6' : '#99f6e4' }}>
-                                            <span className="text-4xl shrink-0" style={{ color: '#14b8a6' }}>🔊</span>
+                                            {filler.image
+                                                ? <img src={filler.image} alt={filler.en} style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '12px', flexShrink: 0 }} />
+                                                : <span className="text-4xl" style={{ color: '#14b8a6', flexShrink: 0 }}>🔊</span>
+                                            }
                                             <span style={{ minWidth: 0 }}>
-                                                <span className="block text-2xl font-black text-gray-800">{sentence}</span>
-                                                <span className="block text-sm text-gray-400 font-bold">{english}</span>
+                                                <span className="block text-xl font-black text-gray-800">{sentence}</span>
+                                                <span className="block text-sm font-bold mt-0.5" style={{ color: '#14b8a6' }}>{english}</span>
                                             </span>
                                         </button>
                                     );
                                 }
                                 return (
-                                    <div key={baseId} className="w-full bg-gray-50 rounded-3xl border-b-4 p-5 flex items-center gap-4 text-left opacity-60" style={{ borderColor: '#e5e7eb' }}>
-                                        <span className="text-4xl shrink-0" style={{ color: '#d1d5db' }}>🎙️</span>
+                                    <div key={baseId} className="w-full bg-gray-50 rounded-3xl border-b-4 p-4 flex items-center gap-3 text-left opacity-60" style={{ borderColor: '#e5e7eb' }}>
+                                        {filler.image
+                                            ? <img src={filler.image} alt={filler.en} style={{ width: '56px', height: '56px', objectFit: 'cover', borderRadius: '12px', flexShrink: 0, filter: 'grayscale(1)' }} />
+                                            : <span className="text-4xl" style={{ color: '#d1d5db', flexShrink: 0 }}>🎙️</span>
+                                        }
                                         <span style={{ minWidth: 0 }}>
-                                            <span className="block text-2xl font-black text-gray-400">{sentence}</span>
-                                            <span className="block text-xs text-gray-400 font-bold mt-1">No {langLabel} recording yet</span>
+                                            <span className="block text-xl font-black text-gray-400">{sentence}</span>
+                                            <span className="block text-sm font-bold text-gray-400 mt-0.5">{english}</span>
+                                            <span className="block text-xs text-gray-400 mt-0.5">No {langLabel} recording yet</span>
                                         </span>
                                     </div>
                                 );
