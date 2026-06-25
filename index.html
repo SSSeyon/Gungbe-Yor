@@ -1354,7 +1354,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.2';
+        const APP_VERSION = '2.9.3';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1988,7 +1988,7 @@
                         )}
                     </div>
 
-                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.2</div>
+                    <div className="z-10 pb-4 text-white/40 text-xs font-medium tracking-widest">v2.9.3</div>
 
                     {challenge && (
                         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -2884,6 +2884,20 @@
                 setTimeout(() => setPlayingId(null), 1200);
             };
 
+            // Tap the card to hear the English sentence read aloud via the device's
+            // built-in speech synthesis (same approach as the FlashCards activity).
+            const speakEnglish = (text) => {
+                if (!text) return;
+                if ('speechSynthesis' in window) {
+                    try {
+                        window.speechSynthesis.cancel();
+                        const u = new SpeechSynthesisUtterance(text);
+                        u.lang = 'en-GB';
+                        window.speechSynthesis.speak(u);
+                    } catch (e) {}
+                }
+            };
+
             const langLabel = lang === 'yoruba' ? 'Yoruba' : 'Gungbe';
             const fillSentence = (frameText, fillerText) => frameText.includes('___') ? frameText.replace('___', fillerText) : frameText + ' ' + fillerText;
 
@@ -2927,6 +2941,27 @@
                 setShuffleSeed(Math.floor(Math.random() * 100000) + 1);
             };
             const backToCategories = () => { setSelectedFrameId(null); setCardIndex(0); };
+
+            // Auto-play whenever the visible card changes (opening a category, Next,
+            // Prev, or a swipe). Plays the recorded sentence when one exists; otherwise
+            // reads the English sentence aloud so every card says something. A short
+            // delay lets the new card render and any previous audio stop first.
+            const currentBaseId = current ? current.baseId : null;
+            const currentHasAudio = current ? current.hasAudio : false;
+            const currentEnglish = current ? fillSentence(current.frame.en, current.filler.en) : '';
+            useEffect(() => {
+                if (!selectedFrame || !current) return;
+                const t = setTimeout(() => {
+                    if (currentHasAudio) {
+                        setPlayingId(currentBaseId);
+                        playAudio(currentBaseId, lang);
+                        setTimeout(() => setPlayingId(null), 1200);
+                    } else {
+                        speakEnglish(currentEnglish);
+                    }
+                }, 250);
+                return () => clearTimeout(t);
+            }, [currentBaseId, currentHasAudio, selectedFrameId, lang]);
 
             const ppOnTouchStart = (e) => { ppTouchEndX.current = null; ppTouchStartX.current = e.targetTouches[0].clientX; };
             const ppOnTouchMove = (e) => { ppTouchEndX.current = e.targetTouches[0].clientX; };
@@ -2984,26 +3019,28 @@
                             <div>
                                 <div className="text-center text-xs font-bold text-gray-400 mb-3">{frame.en} · {safeIndex + 1} / {allCards.length}</div>
                                 <div className="bg-white rounded-3xl shadow-xl border-b-4 overflow-hidden mb-6" style={{ borderColor: hasAudio ? (isPlaying ? '#14b8a6' : '#99f6e4') : '#e5e7eb' }}>
-                                    {filler.imageUrl && (
-                                        <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} onError={e => { e.target.style.display = 'none'; }} />
-                                    )}
-                                    <div className="p-6 text-center">
-                                        <div className="text-3xl font-black text-gray-800 mb-2">{sentence}</div>
-                                        <div className="text-lg font-bold" style={{ color: '#14b8a6' }}>{english}</div>
-                                        {!hasAudio && (
-                                            <div className="mt-3 text-xs font-bold text-gray-400">No {langLabel} recording yet</div>
+                                    <div onClick={() => speakEnglish(english)} style={{ cursor: 'pointer' }} className="active:opacity-80 transition-opacity">
+                                        {filler.imageUrl && (
+                                            <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} onError={e => { e.target.style.display = 'none'; }} />
                                         )}
+                                        <div className="p-6 text-center">
+                                            <div className="text-3xl font-black text-gray-800 mb-2">{sentence}</div>
+                                            <div className="text-lg font-bold" style={{ color: '#14b8a6' }}>{english}</div>
+                                            {!hasAudio && (
+                                                <div className="mt-3 text-xs font-bold text-gray-400">No {langLabel} recording yet</div>
+                                            )}
+                                        </div>
                                     </div>
                                     {hasAudio && (
                                         <button onClick={() => playSentence(frame, filler)}
                                             className="w-full py-5 flex items-center justify-center gap-2 font-black text-white text-lg transition-all active:scale-95"
                                             style={{ background: isPlaying ? '#0d9488' : '#14b8a6' }}>
                                             <span className="text-2xl">{isPlaying ? '🔊' : '▶️'}</span>
-                                            {isPlaying ? 'Playing…' : 'Tap to hear'}
+                                            {isPlaying ? 'Playing…' : 'Hear it again'}
                                         </button>
                                     )}
                                 </div>
-                                {playable.length > 0 && <p className="text-center text-gray-400 text-sm font-bold pb-4">Tap the card to hear it, then say it out loud! 🗣️</p>}
+                                <p className="text-center text-gray-400 text-sm font-bold pb-4">Tap the card to hear it in English 🇬🇧, then say it out loud! 🗣️</p>
                                 <div className="flex gap-3 mt-8">
                                     <button onClick={() => setCardIndex(i => Math.max(0, i - 1))} disabled={safeIndex === 0}
                                         className="flex-1 py-4 rounded-2xl font-black text-lg bg-white shadow disabled:opacity-30">
