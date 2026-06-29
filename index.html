@@ -1405,7 +1405,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.7';
+        const APP_VERSION = '2.9.8';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1583,7 +1583,7 @@
                 // Also push to Firestore so other devices receive the latest frames
                 // without needing a words.json re-export. The pull happens on launch
                 // and on the 5-minute update timer via checkForUpdateRef.
-                fsSaveFrames(frames).catch(() => {});
+                fsSaveFrames(frames).catch(e => { try { console.warn('Frames cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
             }, [frames]);
             // Admin unlock for this session only. Gates Words, Phrases, Stories, and the
             // image/attachment part of Settings. Deliberately NOT persisted, so it resets
@@ -2211,13 +2211,11 @@
 
             const genId = () => 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
-            // Persist phrase changes locally AND to the shared Firestore doc so every
-            // device sees them. fsSaveFrames is in scope (same module as App). We fire
-            // the cloud write without blocking the UI; if offline it simply no-ops and
-            // the local change still holds until the next successful save.
+            // Update phrase state. The App-level effect on [frames] persists every
+            // change to localStorage and pushes it to the shared Firestore doc, so we
+            // do not write here as well (that would save twice per edit).
             const commitFrames = (next) => {
                 setFrames(next);
-                try { fsSaveFrames(next); } catch (e) {}
             };
 
             const addFrame = () => {
