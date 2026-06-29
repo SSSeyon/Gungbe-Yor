@@ -1405,7 +1405,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.4';
+        const APP_VERSION = '2.9.5';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1419,6 +1419,17 @@
             if (!n) return null;
             if (n.indexOf('http') === 0) return n; // already a full URL
             return GIF_BASE + n.replace(/^\/+/, '');
+        };
+        // A filler animation can be a GIF/image or a video. We tell them apart
+        // by file extension on the same filename field, so no schema change is
+        // needed. Videos play full-frame (no crop) and loop; GIFs render as <img>.
+        const isVideoName = (name) => {
+            if (!name) return false;
+            const n = String(name).trim().toLowerCase();
+            return n.indexOf('.webm') === n.length - 5
+                || n.indexOf('.mp4') === n.length - 4
+                || n.indexOf('.m4v') === n.length - 4
+                || n.indexOf('.mov') === n.length - 4;
         };
         // Admin passphrase. Change this to your own secret. NOTE: in a single static
         // HTML file this is a SOFT lock - it gates the admin UI but is visible to anyone
@@ -2310,12 +2321,14 @@
                                                                 inputMode="text"
                                                                 value={editFillerForm.imageUrl || ''}
                                                                 onChange={e => setEditFillerForm(p => ({ ...p, imageUrl: e.target.value }))}
-                                                                placeholder="GIF file name, e.g. Dance.gif"
+                                                                placeholder="GIF or video file, e.g. Dance.gif or Wave.webm"
                                                                 className="w-full p-2 border rounded-lg text-xs"
                                                             />
                                                             {editFillerForm.imageUrl && editFillerForm.imageUrl.trim() && (
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                    <img src={gifUrl(editFillerForm.imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />
+                                                                    {isVideoName(editFillerForm.imageUrl)
+                                                                        ? <video src={gifUrl(editFillerForm.imageUrl)} muted loop autoPlay playsInline style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px', background: '#000' }} onError={e => { e.target.style.display = 'none'; }} />
+                                                                        : <img src={gifUrl(editFillerForm.imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />}
                                                                     <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl(editFillerForm.imageUrl)}</span>
                                                                     <button onClick={() => setEditFillerForm(p => ({ ...p, imageUrl: '' }))} className="text-red-400 text-xs font-bold shrink-0">Clear</button>
                                                                 </div>
@@ -2329,7 +2342,9 @@
                                                     </div>
                                                 ) : (
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        {filler.imageUrl && <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />}
+                                                        {filler.imageUrl && (isVideoName(filler.imageUrl)
+                                                            ? <video src={gifUrl(filler.imageUrl)} muted loop autoPlay playsInline style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, background: '#000' }} onError={e => { e.target.style.display = 'none'; }} />
+                                                            : <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />)}
                                                         <div style={{ flex: 1, minWidth: 0 }}>
                                                             <div className="font-bold text-sm text-gray-800 truncate">{frame.en.includes('___') ? frame.en.replace('___', filler.en) : frame.en + ' ' + filler.en}</div>
                                                             <div className="text-[11px] text-gray-500 truncate">{(frame.yoruba.includes('___') ? frame.yoruba.replace('___', filler.yoruba || '?') : frame.yoruba + ' ' + (filler.yoruba || '?'))} • {(frame.gungbe.includes('___') ? frame.gungbe.replace('___', filler.gungbe || '?') : frame.gungbe + ' ' + (filler.gungbe || '?'))}</div>
@@ -2362,12 +2377,14 @@
                                                 inputMode="text"
                                                 value={(newFiller[frame.id]||{}).imageUrl || ''}
                                                 onChange={e => setNF(frame.id, 'imageUrl', e.target.value)}
-                                                placeholder="GIF file name, e.g. Dance.gif"
+                                                placeholder="GIF or video file, e.g. Dance.gif or Wave.webm"
                                                 className="w-full p-2 border rounded-lg text-xs"
                                             />
                                             {(newFiller[frame.id]||{}).imageUrl && (newFiller[frame.id].imageUrl).trim() && (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                    <img src={gifUrl((newFiller[frame.id]||{}).imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />
+                                                    {isVideoName((newFiller[frame.id]||{}).imageUrl)
+                                                        ? <video src={gifUrl((newFiller[frame.id]||{}).imageUrl)} muted loop autoPlay playsInline style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px', background: '#000' }} onError={e => { e.target.style.display = 'none'; }} />
+                                                        : <img src={gifUrl((newFiller[frame.id]||{}).imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />}
                                                     <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl((newFiller[frame.id]||{}).imageUrl)}</span>
                                                     <button onClick={() => setNF(frame.id, 'imageUrl', '')} className="text-red-400 text-xs font-bold shrink-0">Clear</button>
                                                 </div>
@@ -3261,7 +3278,12 @@
                                 <div className="text-center text-xs font-bold text-gray-400 mb-3">{frame.en} · {safeIndex + 1} / {allCards.length}</div>
                                 <div className="bg-white rounded-3xl shadow-xl border-b-4 overflow-hidden mb-6" style={{ borderColor: hasAudio ? (isPlaying ? '#14b8a6' : '#99f6e4') : '#e5e7eb' }}>
                                     <div onClick={() => speakEnglish(english)} style={{ cursor: 'pointer' }} className="active:opacity-80 transition-opacity">
-                                        {filler.imageUrl && (
+                                        {filler.imageUrl && isVideoName(filler.imageUrl) && (
+                                            <video key={baseId} src={gifUrl(filler.imageUrl)} autoPlay loop muted playsInline
+                                                style={{ width: '100%', display: 'block', background: '#000' }}
+                                                onError={e => { e.target.style.display = 'none'; }} />
+                                        )}
+                                        {filler.imageUrl && !isVideoName(filler.imageUrl) && (
                                             <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '100%', height: '340px', objectFit: 'cover', display: 'block' }} onError={e => { e.target.style.display = 'none'; }} />
                                         )}
                                         <div className="p-6 text-center">
