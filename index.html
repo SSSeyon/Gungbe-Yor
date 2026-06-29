@@ -1405,7 +1405,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.5';
+        const APP_VERSION = '2.9.6';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1897,8 +1897,15 @@
                         const merged = local.map(f => {
                             const rem = remote.find(r => r.id === f.id);
                             if (!rem) return f;
-                            // Use whichever has more fillers; prefer remote text as authoritative
-                            const fillers = rem.fillers && rem.fillers.length > f.fillers.length ? rem.fillers : f.fillers;
+                            // Merge fillers by id: remote is authoritative for a filler's
+                            // text and imageUrl (so GIF->video swaps propagate even though
+                            // the filler count is unchanged). Local-only fillers the cloud
+                            // does not have yet are kept and appended.
+                            const remFillers = Array.isArray(rem.fillers) ? rem.fillers : [];
+                            const locFillers = Array.isArray(f.fillers) ? f.fillers : [];
+                            const remIds = new Set(remFillers.map(x => x.id));
+                            const localOnly = locFillers.filter(x => !remIds.has(x.id));
+                            const fillers = [...remFillers, ...localOnly];
                             const next = { ...f, en: rem.en || f.en, yoruba: rem.yoruba || f.yoruba, gungbe: rem.gungbe || f.gungbe, fillers };
                             if (JSON.stringify(next) !== JSON.stringify(f)) changed = true;
                             return next;
@@ -2187,17 +2194,26 @@
 
             const genId = () => 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
+            // Persist phrase changes locally AND to the shared Firestore doc so every
+            // device sees them. fsSaveFrames is in scope (same module as App). We fire
+            // the cloud write without blocking the UI; if offline it simply no-ops and
+            // the local change still holds until the next successful save.
+            const commitFrames = (next) => {
+                setFrames(next);
+                try { fsSaveFrames(next); } catch (e) {}
+            };
+
             const addFrame = () => {
                 if (!newFrame.en.trim()) { appAlert('Enter the English frame, e.g. "I want ___"'); return; }
                 const f = { id: genId(), en: newFrame.en.trim(), yoruba: newFrame.yoruba.trim(), gungbe: newFrame.gungbe.trim(), fillers: [] };
-                setFrames(prev => [...prev, f]);
+                commitFrames([...frames, f]);
                 setNewFrame({ en: '', yoruba: '', gungbe: '' });
                 setExpandedId(f.id);
             };
 
             const deleteFrame = async (id) => {
                 if (!(await appConfirm('Delete this whole phrase and its recordings?', { danger: true, confirmLabel: 'Delete' }))) return;
-                setFrames(prev => prev.filter(f => f.id !== id));
+                commitFrames(frames.filter(f => f.id !== id));
             };
 
             const addFiller = (frameId) => {
@@ -2205,12 +2221,12 @@
                 if (!nf.en || !nf.en.trim()) { appAlert('Enter the English word for the blank.'); return; }
                 const fillerId = genId();
                 const filler = { id: fillerId, en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim(), imageUrl: (nf.imageUrl || '').trim() };
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: [...f.fillers, filler] } : f));
+                commitFrames(frames.map(f => f.id === frameId ? { ...f, fillers: [...f.fillers, filler] } : f));
                 setNewFiller(prev => ({ ...prev, [frameId]: { en: '', yoruba: '', gungbe: '', imageUrl: '' } }));
             };
 
             const deleteFiller = (frameId, fillerId) => {
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.filter(x => x.id !== fillerId) } : f));
+                commitFrames(frames.map(f => f.id === frameId ? { ...f, fillers: f.fillers.filter(x => x.id !== fillerId) } : f));
             };
 
             const startEditFrame = (frame) => {
@@ -2221,7 +2237,7 @@
 
             const saveEditFrame = (frameId) => {
                 if (!editFrameForm.en.trim()) { appAlert('English frame cannot be empty.'); return; }
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, en: editFrameForm.en.trim(), yoruba: editFrameForm.yoruba.trim(), gungbe: editFrameForm.gungbe.trim() } : f));
+                commitFrames(frames.map(f => f.id === frameId ? { ...f, en: editFrameForm.en.trim(), yoruba: editFrameForm.yoruba.trim(), gungbe: editFrameForm.gungbe.trim() } : f));
                 setEditingFrameId(null);
             };
 
@@ -2232,7 +2248,7 @@
 
             const saveEditFiller = (frameId, fillerId) => {
                 if (!editFillerForm.en.trim()) { appAlert('English word cannot be empty.'); return; }
-                setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim(), imageUrl: (editFillerForm.imageUrl || '').trim() } : x) } : f));
+                commitFrames(frames.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim(), imageUrl: (editFillerForm.imageUrl || '').trim() } : x) } : f));
                 setEditingFillerId(null);
             };
 
