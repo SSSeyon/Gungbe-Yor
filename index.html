@@ -849,9 +849,33 @@
         // Save phrase frames to a single Firestore document so all devices stay
         // in sync automatically. Frames are small text-only JSON so a single doc
         // is fine (well under the 1MB limit even for many frames).
+        // Normalise frames into a plain, Firestore-safe shape. Firestore rejects any
+        // value that is undefined (and a few other types) with "invalid-argument:
+        // Property array contains an invalid nested entity", which silently breaks
+        // cross-device sync. We rebuild each frame and filler from known string fields
+        // so a stray undefined (e.g. a filler saved before imageUrl existed) cannot
+        // poison the whole write.
+        const sanitiseFrames = (frames) => {
+            if (!Array.isArray(frames)) return [];
+            return frames.map(f => ({
+                id: String(f && f.id != null ? f.id : ''),
+                en: String(f && f.en != null ? f.en : ''),
+                yoruba: String(f && f.yoruba != null ? f.yoruba : ''),
+                gungbe: String(f && f.gungbe != null ? f.gungbe : ''),
+                fillers: Array.isArray(f && f.fillers) ? f.fillers.map(x => ({
+                    id: String(x && x.id != null ? x.id : ''),
+                    en: String(x && x.en != null ? x.en : ''),
+                    yoruba: String(x && x.yoruba != null ? x.yoruba : ''),
+                    gungbe: String(x && x.gungbe != null ? x.gungbe : ''),
+                    imageUrl: String(x && x.imageUrl != null ? x.imageUrl : '')
+                })) : []
+            }));
+        };
+
         const fsSaveFrames = async (frames) => {
             if (!db) return;
-            await db.collection('ll_config').doc('frames').set({ frames, updatedAt: Date.now() }, { merge: true });
+            const clean = sanitiseFrames(frames);
+            await db.collection('ll_config').doc('frames').set({ frames: clean, updatedAt: Date.now() }, { merge: true });
         };
 
         const fsLoadFrames = async () => {
@@ -861,6 +885,28 @@
                 if (snap.exists && snap.data().frames) return snap.data().frames;
             } catch (e) {}
             return null;
+        };
+
+        // Real-time frames listener. Calls onFrames(remoteArray) immediately with the
+        // current value and again the instant any device saves a change. Returns an
+        // unsubscribe function (or a no-op if Firestore is unavailable). This is what
+        // makes phrase edits appear on other devices instantly rather than on a timer.
+        const fsListenFrames = (onFrames) => {
+            if (!db) return () => {};
+            try {
+                return db.collection('ll_config').doc('frames').onSnapshot(
+                    snap => {
+                        if (snap && snap.exists) {
+                            const data = snap.data();
+                            if (data && Array.isArray(data.frames)) onFrames(data.frames);
+                        }
+                    },
+                    err => { try { console.warn('Frames listener error:', err && err.code, err && err.message); } catch (_) {} }
+                );
+            } catch (e) {
+                try { console.warn('Frames listen failed:', e && e.message); } catch (_) {}
+                return () => {};
+            }
         };
 
         const fsSaveStoryLink = async (story) => {
@@ -1405,7 +1451,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.8';
+        const APP_VERSION = '2.9.9';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1415,10 +1461,18 @@
         const GIF_BASE = 'https://ssseyon.github.io/Gungbe-Yor/GIFs/';
         const gifUrl = (name) => {
             if (!name) return null;
-            const n = String(name).trim();
+            let n = String(name).trim();
             if (!n) return null;
             if (n.indexOf('http') === 0) return n; // already a full URL
-            return GIF_BASE + n.replace(/^\/+/, '');
+            n = n.replace(/^\/+/, '').replace(/\.+$/, ''); // drop leading slashes and any trailing dots
+            return GIF_BASE + n;
+        };
+        // True only when the filename ends in a complete, known media extension. Used to
+        // gate admin previews so they do not fire a fetch on every keystroke while the
+        // name is being typed (which produced 404 noise like S.mp4, Sl.mp4, ...).
+        const isCompleteMedia = (name) => {
+            if (!name) return false;
+            return /\.(gif|png|jpg|jpeg|webp|webm|mp4|m4v|mov)$/i.test(String(name).trim());
         };
         // A filler animation can be a GIF/image or a video. We tell them apart
         // by file extension on the same filename field, so no schema change is
@@ -1891,49 +1945,42 @@
             // Pull + merge frames from Firestore. Defined once and reused for the
             // initial load, a 5-minute poll, and tab-focus, so every device picks up
             // another device's saved changes without a manual reload.
-            const pullFrames = React.useCallback(() => {
-                fsLoadFrames().then(remote => {
-                    if (!remote || !Array.isArray(remote)) return;
-                    setFrames(local => {
-                        const localMap = new Map(local.map(f => [f.id, f]));
-                        let changed = false;
-                        const merged = local.map(f => {
-                            const rem = remote.find(r => r.id === f.id);
-                            if (!rem) return f;
-                            // Merge fillers by id: remote is authoritative for a filler's
-                            // text and imageUrl (so GIF->video swaps propagate even though
-                            // the filler count is unchanged). Local-only fillers the cloud
-                            // does not have yet are kept and appended.
-                            const remFillers = Array.isArray(rem.fillers) ? rem.fillers : [];
-                            const locFillers = Array.isArray(f.fillers) ? f.fillers : [];
-                            const remIds = new Set(remFillers.map(x => x.id));
-                            const localOnly = locFillers.filter(x => !remIds.has(x.id));
-                            const fillers = [...remFillers, ...localOnly];
-                            const next = { ...f, en: rem.en || f.en, yoruba: rem.yoruba || f.yoruba, gungbe: rem.gungbe || f.gungbe, fillers };
-                            if (JSON.stringify(next) !== JSON.stringify(f)) changed = true;
-                            return next;
-                        });
-                        const newOnes = remote.filter(r => !localMap.has(r.id));
-                        if (newOnes.length > 0) changed = true;
-                        if (!changed) return local;
-                        return [...merged, ...newOnes];
+            // Merge a remote frames array into local state by id. Remote is authoritative
+            // for frame and filler text and for each filler's imageUrl, so GIF/video
+            // swaps from another device land even when the filler count is unchanged.
+            // Local-only frames/fillers the cloud lacks are preserved. Idempotent: if
+            // nothing differs it returns the same reference, so an echo of our own save
+            // does not cause a needless re-render.
+            const mergeRemoteFrames = React.useCallback((remote) => {
+                if (!remote || !Array.isArray(remote)) return;
+                setFrames(local => {
+                    const localMap = new Map(local.map(f => [f.id, f]));
+                    let changed = false;
+                    const merged = local.map(f => {
+                        const rem = remote.find(r => r.id === f.id);
+                        if (!rem) return f;
+                        const remFillers = Array.isArray(rem.fillers) ? rem.fillers : [];
+                        const locFillers = Array.isArray(f.fillers) ? f.fillers : [];
+                        const remIds = new Set(remFillers.map(x => x.id));
+                        const localOnly = locFillers.filter(x => !remIds.has(x.id));
+                        const fillers = [...remFillers, ...localOnly];
+                        const next = { ...f, en: rem.en || f.en, yoruba: rem.yoruba || f.yoruba, gungbe: rem.gungbe || f.gungbe, fillers };
+                        if (JSON.stringify(next) !== JSON.stringify(f)) changed = true;
+                        return next;
                     });
-                }).catch(() => {});
+                    const newOnes = remote.filter(r => !localMap.has(r.id));
+                    if (newOnes.length > 0) changed = true;
+                    if (!changed) return local;
+                    return [...merged, ...newOnes];
+                });
             }, []);
 
             useEffect(() => {
-                pullFrames(); // initial load
-                const id = setInterval(pullFrames, 5 * 60 * 1000); // every 5 minutes
-                const onFocus = () => pullFrames();
-                const onVis = () => { if (!document.hidden) pullFrames(); };
-                window.addEventListener('focus', onFocus);
-                document.addEventListener('visibilitychange', onVis);
-                return () => {
-                    clearInterval(id);
-                    window.removeEventListener('focus', onFocus);
-                    document.removeEventListener('visibilitychange', onVis);
-                };
-            }, [pullFrames]);
+                // Real-time sync: fires immediately with the current cloud value and again
+                // the instant any device saves. No polling, no focus handlers needed.
+                const unsubscribe = fsListenFrames(mergeRemoteFrames);
+                return () => { try { unsubscribe(); } catch (e) {} };
+            }, [mergeRemoteFrames]);
 
             useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
             useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
@@ -2357,10 +2404,12 @@
                                                             />
                                                             {editFillerForm.imageUrl && editFillerForm.imageUrl.trim() && (
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                    {isVideoName(editFillerForm.imageUrl)
+                                                                    {!isCompleteMedia(editFillerForm.imageUrl)
+                                                                        ? <span className="text-[10px] text-gray-400" style={{ minWidth: 0 }}>Keep typing the file name...</span>
+                                                                        : (isVideoName(editFillerForm.imageUrl)
                                                                         ? <video src={gifUrl(editFillerForm.imageUrl)} muted loop autoPlay playsInline style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px', background: '#000' }} onError={e => { e.target.style.display = 'none'; }} />
-                                                                        : <img src={gifUrl(editFillerForm.imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />}
-                                                                    <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl(editFillerForm.imageUrl)}</span>
+                                                                        : <img src={gifUrl(editFillerForm.imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />)}
+                                                                    {isCompleteMedia(editFillerForm.imageUrl) && <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl(editFillerForm.imageUrl)}</span>}
                                                                     <button onClick={() => setEditFillerForm(p => ({ ...p, imageUrl: '' }))} className="text-red-400 text-xs font-bold shrink-0">Clear</button>
                                                                 </div>
                                                             )}
@@ -2413,10 +2462,12 @@
                                             />
                                             {(newFiller[frame.id]||{}).imageUrl && (newFiller[frame.id].imageUrl).trim() && (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                    {isVideoName((newFiller[frame.id]||{}).imageUrl)
+                                                    {!isCompleteMedia((newFiller[frame.id]||{}).imageUrl)
+                                                        ? <span className="text-[10px] text-gray-400" style={{ minWidth: 0 }}>Keep typing the file name...</span>
+                                                        : (isVideoName((newFiller[frame.id]||{}).imageUrl)
                                                         ? <video src={gifUrl((newFiller[frame.id]||{}).imageUrl)} muted loop autoPlay playsInline style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px', background: '#000' }} onError={e => { e.target.style.display = 'none'; }} />
-                                                        : <img src={gifUrl((newFiller[frame.id]||{}).imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />}
-                                                    <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl((newFiller[frame.id]||{}).imageUrl)}</span>
+                                                        : <img src={gifUrl((newFiller[frame.id]||{}).imageUrl)} alt="" style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '6px' }} onError={e => { e.target.style.display = 'none'; }} onLoad={e => { e.target.style.display = 'block'; }} />)}
+                                                    {isCompleteMedia((newFiller[frame.id]||{}).imageUrl) && <span className="text-[10px] text-gray-400 truncate" style={{ minWidth: 0 }}>{gifUrl((newFiller[frame.id]||{}).imageUrl)}</span>}
                                                     <button onClick={() => setNF(frame.id, 'imageUrl', '')} className="text-red-400 text-xs font-bold shrink-0">Clear</button>
                                                 </div>
                                             )}
