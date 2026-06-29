@@ -1179,6 +1179,57 @@
             catch (e) { return dataUri; }
         };
 
+        // Remove orphaned filler-image entries (sfimg_<frameId>_<fillerId>) left in
+        // IndexedDB by an older embedded-image model. An entry is orphaned when no
+        // current frame/filler pair maps to its key. Returns the number deleted.
+        const cleanupOrphanSfimg = async (frames) => {
+            const valid = new Set();
+            (frames || []).forEach(fr => {
+                (fr.fillers || []).forEach(fl => {
+                    valid.add(sfImageKey(fr.id, fl.id));
+                });
+            });
+            const db = await initDB();
+            const keys = await new Promise((resolve, reject) => {
+                const tx = db.transaction([STORE_NAME], 'readonly');
+                const req = tx.objectStore(STORE_NAME).getAllKeys();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = (e) => reject(e.target.error);
+            });
+            const orphans = keys.filter(k =>
+                typeof k === 'string' && k.indexOf('sfimg_') === 0 && !valid.has(k)
+            );
+            if (orphans.length === 0) return 0;
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction([STORE_NAME], 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                orphans.forEach(k => store.delete(k));
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(e.target.error);
+            });
+            return orphans.length;
+        };
+
+        // Count orphaned sfimg_ entries without deleting (for the health dashboard).
+        const countOrphanSfimg = async (frames) => {
+            const valid = new Set();
+            (frames || []).forEach(fr => {
+                (fr.fillers || []).forEach(fl => {
+                    valid.add(sfImageKey(fr.id, fl.id));
+                });
+            });
+            const db = await initDB();
+            const keys = await new Promise((resolve, reject) => {
+                const tx = db.transaction([STORE_NAME], 'readonly');
+                const req = tx.objectStore(STORE_NAME).getAllKeys();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = (e) => reject(e.target.error);
+            });
+            return keys.filter(k =>
+                typeof k === 'string' && k.indexOf('sfimg_') === 0 && !valid.has(k)
+            ).length;
+        };
+
         const getAllAudioEntries = async () => {
             const db = await initDB();
             return new Promise((resolve, reject) => {
@@ -1354,7 +1405,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.3';
+        const APP_VERSION = '2.9.4';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1416,6 +1467,68 @@
                 ))}
             </div>
         );
+
+        // --- IN-APP DIALOG (replaces native alert/confirm) ---
+        // A module-scoped bridge so any component can call appAlert / appConfirm
+        // without prop threading. A single AppDialog host renders the modal.
+        const __dialogListeners = new Set();
+        let __dialogResolve = null;
+        const __openDialog = (opts) => new Promise((resolve) => {
+            __dialogResolve = resolve;
+            __dialogListeners.forEach(fn => fn(opts));
+        });
+        const __settleDialog = (val) => {
+            const r = __dialogResolve;
+            __dialogResolve = null;
+            __dialogListeners.forEach(fn => fn(null));
+            if (r) r(val);
+        };
+        // appAlert(message) -> Promise<true>; appConfirm(message) -> Promise<bool>
+        const appAlert = (message, opts) => __openDialog(Object.assign({ message: message, confirm: false }, opts || {}));
+        const appConfirm = (message, opts) => __openDialog(Object.assign({ message: message, confirm: true }, opts || {}));
+
+        const AppDialog = () => {
+            const [opts, setOpts] = React.useState(null);
+            React.useEffect(() => {
+                const fn = (o) => setOpts(o);
+                __dialogListeners.add(fn);
+                return () => { __dialogListeners.delete(fn); };
+            }, []);
+            if (!opts) return null;
+            const isConfirm = !!opts.confirm;
+            const danger = !!opts.danger;
+            const confirmLabel = opts.confirmLabel || (isConfirm ? 'Confirm' : 'OK');
+            const cancelLabel = opts.cancelLabel || 'Cancel';
+            const overlay = {
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.45)', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem'
+            };
+            const card = {
+                background: '#ffffff', borderRadius: '1rem', maxWidth: '22rem', width: '100%',
+                padding: '1.25rem', boxShadow: '0 10px 40px rgba(0,0,0,0.25)'
+            };
+            const row = { display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end' };
+            const btn = { padding: '0.5rem 1rem', borderRadius: '0.75rem', fontWeight: 800, fontSize: '0.875rem', border: 'none', cursor: 'pointer' };
+            const cancelBtn = Object.assign({}, btn, { background: '#f3f4f6', color: '#374151' });
+            const okBtn = Object.assign({}, btn, danger
+                ? { background: '#dc2626', color: '#ffffff' }
+                : { background: '#4f46e5', color: '#ffffff' });
+            return (
+                <div style={overlay} onClick={() => { if (isConfirm) __settleDialog(false); else __settleDialog(true); }}>
+                    <div style={card} onClick={(e) => e.stopPropagation()}>
+                        {opts.title && <div style={{ fontWeight: 900, fontSize: '1rem', marginBottom: '0.5rem', color: '#111827' }}>{opts.title}</div>}
+                        <div style={{ fontSize: '0.9rem', color: '#374151', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{opts.message}</div>
+                        <div style={row}>
+                            {isConfirm && (
+                                <button style={cancelBtn} onClick={() => __settleDialog(false)}>{cancelLabel}</button>
+                            )}
+                            <button style={okBtn} onClick={() => __settleDialog(isConfirm ? true : true)}>{confirmLabel}</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
 
         const App = () => {
             // Mode always starts at 'landing'; the real location is restored in an
@@ -1854,6 +1967,7 @@
             return (
                 <div className="min-h-screen relative font-sans text-gray-800">
                     <Background theme={theme} />
+                    <AppDialog />
                     {(appUpdate || updateAvailable || (updateError && !updateLoading) || updateSuccess) && (
                         <div className="fixed top-0 left-0 right-0 z-50 shadow-md">
                             {appUpdate && (
@@ -1937,7 +2051,7 @@
             };
             const verify = () => {
                 if (answer.trim() === challenge.a) { setChallenge(null); setMode('parent'); }
-                else { alert("Oops! Try again."); setAnswer(''); }
+                else { appAlert("Oops! Try again."); setAnswer(''); }
             };
 
             const floatingEmojis = ['🌟','🎈','🦁','🌈','🎵','🐘','🦋','🌸','⭐','🎉'];
@@ -2063,21 +2177,21 @@
             const genId = () => 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 
             const addFrame = () => {
-                if (!newFrame.en.trim()) { alert('Enter the English frame, e.g. "I want ___"'); return; }
+                if (!newFrame.en.trim()) { appAlert('Enter the English frame, e.g. "I want ___"'); return; }
                 const f = { id: genId(), en: newFrame.en.trim(), yoruba: newFrame.yoruba.trim(), gungbe: newFrame.gungbe.trim(), fillers: [] };
                 setFrames(prev => [...prev, f]);
                 setNewFrame({ en: '', yoruba: '', gungbe: '' });
                 setExpandedId(f.id);
             };
 
-            const deleteFrame = (id) => {
-                if (!window.confirm('Delete this whole phrase and its recordings?')) return;
+            const deleteFrame = async (id) => {
+                if (!(await appConfirm('Delete this whole phrase and its recordings?', { danger: true, confirmLabel: 'Delete' }))) return;
                 setFrames(prev => prev.filter(f => f.id !== id));
             };
 
             const addFiller = (frameId) => {
                 const nf = newFiller[frameId] || {};
-                if (!nf.en || !nf.en.trim()) { alert('Enter the English word for the blank.'); return; }
+                if (!nf.en || !nf.en.trim()) { appAlert('Enter the English word for the blank.'); return; }
                 const fillerId = genId();
                 const filler = { id: fillerId, en: nf.en.trim(), yoruba: (nf.yoruba || '').trim(), gungbe: (nf.gungbe || '').trim(), imageUrl: (nf.imageUrl || '').trim() };
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: [...f.fillers, filler] } : f));
@@ -2095,7 +2209,7 @@
             };
 
             const saveEditFrame = (frameId) => {
-                if (!editFrameForm.en.trim()) { alert('English frame cannot be empty.'); return; }
+                if (!editFrameForm.en.trim()) { appAlert('English frame cannot be empty.'); return; }
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, en: editFrameForm.en.trim(), yoruba: editFrameForm.yoruba.trim(), gungbe: editFrameForm.gungbe.trim() } : f));
                 setEditingFrameId(null);
             };
@@ -2106,7 +2220,7 @@
             };
 
             const saveEditFiller = (frameId, fillerId) => {
-                if (!editFillerForm.en.trim()) { alert('English word cannot be empty.'); return; }
+                if (!editFillerForm.en.trim()) { appAlert('English word cannot be empty.'); return; }
                 setFrames(prev => prev.map(f => f.id === frameId ? { ...f, fillers: f.fillers.map(x => x.id === fillerId ? { ...x, en: editFillerForm.en.trim(), yoruba: editFillerForm.yoruba.trim(), gungbe: editFillerForm.gungbe.trim(), imageUrl: (editFillerForm.imageUrl || '').trim() } : x) } : f));
                 setEditingFillerId(null);
             };
@@ -2271,6 +2385,132 @@
             );
         };
 
+        // Parent dashboard health check: surfaces missing audio and orphaned
+        // filler-image entries so the library can be kept complete. Read-only
+        // except for the orphan clean-up button (admin only).
+        const HealthCheck = ({ words, frames, isAdmin }) => {
+            const [loading, setLoading] = useState(true);
+            const [report, setReport] = useState(null);
+            const [cleaning, setCleaning] = useState(false);
+
+            const runScan = React.useCallback(async () => {
+                setLoading(true);
+                try {
+                    const entries = await getAllAudioEntries();
+                    const has = (k) => Object.prototype.hasOwnProperty.call(entries, k);
+                    const missY = [];
+                    const missG = [];
+                    (words || []).forEach(w => {
+                        if (!has(w.id + '_yoruba')) missY.push(w.english || w.id);
+                        if (!has(w.id + '_gungbe')) missG.push(w.english || w.id);
+                    });
+                    const fillerGaps = [];
+                    (frames || []).forEach(fr => {
+                        (fr.fillers || []).forEach(fl => {
+                            ['yoruba', 'gungbe'].forEach(lang => {
+                                const k = 'sf_' + fr.id + '_' + fl.id + '_' + lang;
+                                if (!has(k)) {
+                                    fillerGaps.push((fr.en || fr.id) + ' / ' + (fl.en || fl.id) + ' (' + lang + ')');
+                                }
+                            });
+                        });
+                    });
+                    const orphans = await countOrphanSfimg(frames);
+                    setReport({
+                        wordCount: (words || []).length,
+                        missY: missY,
+                        missG: missG,
+                        fillerGaps: fillerGaps,
+                        orphans: orphans
+                    });
+                } catch (e) {
+                    setReport({ error: e.message });
+                } finally {
+                    setLoading(false);
+                }
+            }, [words, frames]);
+
+            useEffect(() => { runScan(); }, [runScan]);
+
+            const doClean = async () => {
+                setCleaning(true);
+                try {
+                    const n = await cleanupOrphanSfimg(frames);
+                    await appAlert('Removed ' + n + ' orphaned image ' + (n === 1 ? 'entry' : 'entries') + '.');
+                    await runScan();
+                } catch (e) {
+                    await appAlert('Clean-up failed: ' + e.message);
+                } finally {
+                    setCleaning(false);
+                }
+            };
+
+            const Row = ({ label, items, icon }) => (
+                <div style={{ marginBottom: '10px' }}>
+                    <div className="flex items-center gap-2" style={{ marginBottom: '4px' }}>
+                        <Icon name={icon} size={16} className={items.length ? 'text-amber-500' : 'text-green-500'} />
+                        <span className="text-sm font-bold text-gray-700">{label}</span>
+                        <span className={'text-xs font-black ' + (items.length ? 'text-amber-600' : 'text-green-600')}>
+                            {items.length ? items.length : 'all present'}
+                        </span>
+                    </div>
+                    {items.length > 0 && (
+                        <p className="text-xs text-gray-500" style={{ fontFamily: 'sans-serif', lineHeight: '1.5' }}>
+                            {items.slice(0, 12).join(', ')}{items.length > 12 ? ' and ' + (items.length - 12) + ' more' : ''}
+                        </p>
+                    )}
+                </div>
+            );
+
+            return (
+                <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                    <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                            <Icon name="BarChart" className="text-rose-500" /> Health Check
+                        </h2>
+                        <button onClick={runScan} disabled={loading}
+                            className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-lg border border-blue-100 disabled:opacity-60">
+                            {loading ? 'Scanning...' : 'Rescan'}
+                        </button>
+                    </div>
+                    {loading && !report && (
+                        <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>Scanning library...</p>
+                    )}
+                    {report && report.error && (
+                        <p className="text-xs text-red-500" style={{ fontFamily: 'sans-serif' }}>Scan error: {report.error}</p>
+                    )}
+                    {report && !report.error && (
+                        <div>
+                            <Row label="Words missing Yoruba audio" items={report.missY} icon="Volume2" />
+                            <Row label="Words missing Gungbe audio" items={report.missG} icon="Volume2" />
+                            <Row label="Phrase blanks missing audio" items={report.fillerGaps} icon="Mic" />
+                            <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+                                <div className="flex items-center gap-2">
+                                    <Icon name="Trash2" size={16} className={report.orphans ? 'text-amber-500' : 'text-green-500'} />
+                                    <span className="text-sm font-bold text-gray-700">Orphaned image entries</span>
+                                    <span className={'text-xs font-black ' + (report.orphans ? 'text-amber-600' : 'text-green-600')}>
+                                        {report.orphans ? report.orphans : 'none'}
+                                    </span>
+                                </div>
+                                {isAdmin && report.orphans > 0 && (
+                                    <button onClick={doClean} disabled={cleaning}
+                                        className="text-xs font-bold text-red-600 bg-red-50 px-3 py-1 rounded-lg border border-red-100 disabled:opacity-60">
+                                        {cleaning ? '...' : 'Clean up'}
+                                    </button>
+                                )}
+                            </div>
+                            {report.missY.length === 0 && report.missG.length === 0 && report.fillerGaps.length === 0 && report.orphans === 0 && (
+                                <div className="flex items-center gap-2 mt-2 text-green-600">
+                                    <Icon name="Check" size={16} />
+                                    <span className="text-sm font-bold">Everything looks complete.</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const ParentManager = ({ words, setWords, frames, setFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
             const [view, setView] = useState('words');
             const [passInput, setPassInput] = useState('');
@@ -2425,7 +2665,7 @@
                     const vJson = JSON.stringify({ version: newVersion, timestamp: new Date().toISOString() });
                     setVersionHref('data:application/json;charset=utf-8,' + encodeURIComponent(vJson));
                     try { localStorage.removeItem('ll_words_dirty'); } catch (e) {}
-                } catch (e) { alert('Export failed: ' + e.message); }
+                } catch (e) { appAlert('Export failed: ' + e.message); }
                 finally { setExporting(false); }
             };
 
@@ -2459,7 +2699,7 @@
                     document.body.appendChild(a);
                     a.click();
                     setTimeout(() => { document.body.removeChild(a); }, 1000);
-                } catch (e) { alert('Export failed: ' + e.message); }
+                } catch (e) { appAlert('Export failed: ' + e.message); }
                 finally { setExportingVersion(false); }
             };
 
@@ -2485,7 +2725,7 @@
                     document.body.appendChild(a);
                     a.click();
                     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 6000);
-                } catch (e) { alert('Export failed: ' + e.message); }
+                } catch (e) { appAlert('Export failed: ' + e.message); }
                 finally { setExporting(false); }
             };
 
@@ -2519,8 +2759,8 @@
                             localStorage.setItem('ll_words_version', data.version);
                             setLocalVersion(data.version);
                         }
-                        alert('Backup restored!');
-                    } catch (err) { alert('Error reading backup: ' + err.message); }
+                        appAlert('Backup restored!');
+                    } catch (err) { appAlert('Error reading backup: ' + err.message); }
                 };
                 reader.readAsText(file);
             };
@@ -2542,9 +2782,9 @@
             };
 
             const handleReset = async () => { 
-                 if (confirm("⚠️ ARE YOU SURE? This will delete all words.")) {
+                 if (await appConfirm("⚠️ Are you sure? This will delete all words.", { danger: true, confirmLabel: 'Delete all' })) {
                     localStorage.removeItem('littleLinguistWords_v3'); setWords(INITIAL_DATA);
-                    try { const db = await initDB(); const t = db.transaction([STORE_NAME], 'readwrite'); t.objectStore(STORE_NAME).clear(); alert("Reset complete."); } catch(e) { console.error(e); }
+                    try { const db = await initDB(); const t = db.transaction([STORE_NAME], 'readwrite'); t.objectStore(STORE_NAME).clear(); appAlert("Reset complete."); } catch(e) { console.error(e); }
                 }
             };
 
@@ -2582,16 +2822,17 @@
                                         <p className="text-xs text-gray-500" style={{ fontFamily: 'sans-serif' }}>Enter the admin passphrase to manage Words, Phrases, Stories and images.</p>
                                         <input type="password" value={passInput}
                                             onChange={e => setPassInput(e.target.value)}
-                                            onKeyDown={e => { if (e.key === 'Enter') { if (passInput === ADMIN_PASSPHRASE) { setIsAdmin(true); setPassInput(''); setView('words'); } else { alert('Incorrect passphrase.'); } } }}
+                                            onKeyDown={e => { if (e.key === 'Enter') { if (passInput === ADMIN_PASSPHRASE) { setIsAdmin(true); setPassInput(''); setView('words'); } else { appAlert('Incorrect passphrase.'); } } }}
                                             placeholder="Passphrase" className="w-full p-2 border rounded-lg text-sm" />
                                         <button onClick={() => {
                                             if (passInput === ADMIN_PASSPHRASE) { setIsAdmin(true); setPassInput(''); setView('words'); }
-                                            else { alert('Incorrect passphrase.'); }
+                                            else { appAlert('Incorrect passphrase.'); }
                                         }} className="w-full bg-blue-500 text-white p-2 rounded-lg font-bold text-sm">Unlock</button>
                                     </div>
                                 )}
                             </div>
                             <LibraryStats words={words} />
+                            <HealthCheck words={words} frames={frames} isAdmin={isAdmin} />
                             {isAdmin && (
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
                                 <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
@@ -2823,7 +3064,7 @@
                              await saveAudioBlob(`${wordId}_${lang}`, blob); setHasRec(true); onRecordComplete();
                          };
                          mediaRecorder.current.start(); setIsRecording(true);
-                     } catch(e) { alert("Mic Error"); }
+                     } catch(e) { appAlert("Mic Error"); }
                  }
              };
 
