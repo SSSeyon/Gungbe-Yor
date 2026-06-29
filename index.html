@@ -1405,7 +1405,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.6';
+        const APP_VERSION = '2.9.7';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1888,7 +1888,10 @@
             // overwriting ones that exist locally by id, so each device's recordings
             // are preserved. Runs once on mount; Firestore changes are also pushed
             // whenever the admin saves frames on any device.
-            useEffect(() => {
+            // Pull + merge frames from Firestore. Defined once and reused for the
+            // initial load, a 5-minute poll, and tab-focus, so every device picks up
+            // another device's saved changes without a manual reload.
+            const pullFrames = React.useCallback(() => {
                 fsLoadFrames().then(remote => {
                     if (!remote || !Array.isArray(remote)) return;
                     setFrames(local => {
@@ -1917,6 +1920,20 @@
                     });
                 }).catch(() => {});
             }, []);
+
+            useEffect(() => {
+                pullFrames(); // initial load
+                const id = setInterval(pullFrames, 5 * 60 * 1000); // every 5 minutes
+                const onFocus = () => pullFrames();
+                const onVis = () => { if (!document.hidden) pullFrames(); };
+                window.addEventListener('focus', onFocus);
+                document.addEventListener('visibilitychange', onVis);
+                return () => {
+                    clearInterval(id);
+                    window.removeEventListener('focus', onFocus);
+                    document.removeEventListener('visibilitychange', onVis);
+                };
+            }, [pullFrames]);
 
             useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
             useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
