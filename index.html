@@ -1572,7 +1572,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.11.0';
+        const APP_VERSION = '2.12.0';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1735,6 +1735,20 @@
             });
             const cloudAudioKeysRef = useRef(cloudAudioKeys);
             useEffect(() => { cloudAudioKeysRef.current = cloudAudioKeys; }, [cloudAudioKeys]);
+            // Deleted words and phrases land here instead of vanishing, so they can be
+            // restored or permanently removed from Settings > Archive. Local to this
+            // device (the audio for a restored item survives in IndexedDB/cloud because
+            // deletes never touch the recordings, so restoring re-links them by id).
+            const [archive, setArchive] = useState(() => {
+                try { const s = JSON.parse(localStorage.getItem('ll_archive_v1') || 'null'); return Array.isArray(s) ? s : []; }
+                catch (e) { return []; }
+            });
+            // Live-sync indicator for the Parent Zone header: 'synced' | 'syncing' | 'offline'.
+            const [syncState, setSyncState] = useState(() => (typeof navigator !== 'undefined' && navigator.onLine === false) ? 'offline' : 'synced');
+            const syncPendingRef = useRef(0);
+            // Audio keys present in IndexedDB on THIS device. Unioned with cloudAudioKeys
+            // to drive the missing-audio badges and the "everything synced" collapse.
+            const [localAudioKeys, setLocalAudioKeys] = useState([]);
             const [currentTheme, setCurrentTheme] = useState('boy');
             const [stickers, setStickers] = useState([]);
             const [stats, setStats] = useState({ correct: 0, incorrect: 0, categories: {} });
@@ -2094,13 +2108,38 @@
                 });
             }, []);
 
+            // Track in-flight cloud writes so the header dot can show 'syncing' and drop
+            // back to 'synced' (or 'offline') once everything has settled.
+            const beginSync = () => { syncPendingRef.current += 1; setSyncState('syncing'); };
+            const endSync = () => {
+                syncPendingRef.current = Math.max(0, syncPendingRef.current - 1);
+                if (syncPendingRef.current === 0) setSyncState((typeof navigator !== 'undefined' && navigator.onLine === false) ? 'offline' : 'synced');
+            };
+            useEffect(() => {
+                const goOnline = () => { if (syncPendingRef.current === 0) setSyncState('synced'); };
+                const goOffline = () => setSyncState('offline');
+                window.addEventListener('online', goOnline);
+                window.addEventListener('offline', goOffline);
+                return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+            }, []);
+
+            // Keep a live ref to frames so archive-restore (an event handler passed to a
+            // child) can check the current phrase list without stale-closure surprises.
+            const framesRef = useRef(frames);
+            useEffect(() => { framesRef.current = frames; }, [frames]);
+
             // Apply a phrase-frame change locally AND push it to the cloud. Use this for
             // ADMIN edits (add/edit/delete frames and fillers) only, exactly like
-            // commitWords. The passive [frames] effect writes localStorage but never the
-            // cloud, so a remote update or a pack restore never echoes back.
-            const commitFrames = (next) => {
-                setFrames(next);
-                fsSaveFrames(next).catch(e => { try { console.warn('Frames cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
+            // commitWords. Accepts a value or a functional updater. The passive [frames]
+            // effect writes localStorage but never the cloud, so a remote update or a
+            // pack restore never echoes back.
+            const commitFrames = (updater) => {
+                setFrames(prev => {
+                    const next = typeof updater === 'function' ? updater(prev) : updater;
+                    beginSync();
+                    fsSaveFrames(next).then(endSync).catch(e => { endSync(); try { console.warn('Frames cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
+                    return next;
+                });
             };
 
             useEffect(() => {
@@ -2118,7 +2157,8 @@
                 setWords(prev => {
                     const next = typeof updater === 'function' ? updater(prev) : updater;
                     try { localStorage.setItem('littleLinguistWords_v3', JSON.stringify(next)); } catch (e) {}
-                    fsSaveWords(next).catch(e => { try { console.warn('Words cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
+                    beginSync();
+                    fsSaveWords(next).then(endSync).catch(e => { endSync(); try { console.warn('Words cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
                     return next;
                 });
             };
@@ -2127,6 +2167,7 @@
             // key locally so playback fallback knows it exists. Best-effort: a failure
             // is logged, never thrown, so recording still works offline.
             const uploadAudioToCloud = async (key, blob) => {
+                beginSync();
                 try {
                     const ok = await fsSaveAudioClip(key, blob);
                     if (ok) setCloudAudioKeys(prev => {
@@ -2135,8 +2176,64 @@
                         try { localStorage.setItem('ll_cloud_audio_keys', JSON.stringify(next)); } catch (e) {}
                         return next;
                     });
+                    setLocalAudioKeys(prev => prev.includes(key) ? prev : [...prev, key]);
                 } catch (e) { try { console.warn('Audio cloud upload failed:', key, e && e.message); } catch (_) {} }
+                finally { endSync(); }
             };
+
+            // --- ARCHIVE (deleted words + phrases) ---
+            // A deleted word/phrase/filler is pushed here so it can be restored or
+            // permanently removed from Settings > Archive, rather than lost on a mis-tap.
+            const persistArchive = (arr) => { try { localStorage.setItem('ll_archive_v1', JSON.stringify(arr)); } catch (e) {} };
+            const archiveItem = (entry) => {
+                setArchive(prev => {
+                    const uid = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+                    const next = [{ uid, deletedAt: Date.now(), ...entry }, ...prev];
+                    persistArchive(next);
+                    return next;
+                });
+            };
+            const dropArchived = (uid) => setArchive(prev => { const next = prev.filter(e => e.uid !== uid); persistArchive(next); return next; });
+            const clearArchive = () => { setArchive([]); persistArchive([]); };
+            // Restore an archived entry back into the live (and cloud-synced) data.
+            const restoreArchived = (uid) => {
+                setArchive(prev => {
+                    const entry = prev.find(e => e.uid === uid);
+                    if (!entry) return prev;
+                    if (entry.type === 'word') {
+                        commitWords(ws => [entry.data, ...ws.filter(w => w.id !== entry.data.id)]);
+                    } else if (entry.type === 'frame') {
+                        commitFrames(fs => [...fs.filter(f => f.id !== entry.data.id), entry.data]);
+                    } else if (entry.type === 'filler') {
+                        const parent = (framesRef.current || []).find(f => f.id === entry.frameId);
+                        if (!parent) { appAlert('The phrase this word belonged to was deleted. Restore that phrase first, then restore this word.'); return prev; }
+                        commitFrames(fs => fs.map(f => f.id === entry.frameId
+                            ? { ...f, fillers: [...(f.fillers || []).filter(x => x.id !== entry.data.id), entry.data] }
+                            : f));
+                    }
+                    const next = prev.filter(e => e.uid !== uid);
+                    persistArchive(next);
+                    return next;
+                });
+            };
+
+            // --- AVAILABLE AUDIO KEYS (for missing-audio badges + sync status) ---
+            // The set of recording keys that exist anywhere this word could play from:
+            // local IndexedDB or the cloud. A word/filler with a key absent here truly
+            // has no recording yet.
+            const refreshLocalAudioKeys = React.useCallback(async () => {
+                try { const entries = await getAllAudioEntries(); setLocalAudioKeys(Object.keys(entries)); } catch (e) {}
+            }, []);
+            useEffect(() => { refreshLocalAudioKeys(); }, [refreshLocalAudioKeys]);
+            useEffect(() => { if (mode === 'parent') refreshLocalAudioKeys(); }, [mode, refreshLocalAudioKeys]);
+            const availableAudioKeys = React.useMemo(() => new Set([...(localAudioKeys || []), ...(cloudAudioKeys || [])]), [localAudioKeys, cloudAudioKeys]);
+            // True once every local recording is also in the cloud, i.e. nothing left to
+            // migrate. Used to collapse the Cloud Sync card into a compact "all synced".
+            const audioMigrated = React.useMemo(() => {
+                const cloud = new Set(cloudAudioKeys || []);
+                const localClips = (localAudioKeys || []).filter(k => /_(yoruba|gungbe)$/.test(k));
+                return localClips.length > 0 && localClips.every(k => cloud.has(k));
+            }, [localAudioKeys, cloudAudioKeys]);
 
             // Reconcile the cloud words doc into local state. Once the doc exists the
             // cloud is the source of truth, so we REPLACE local with it (this is what
@@ -2353,7 +2450,7 @@
                         (appUpdate ? 1 : 0) + (updateAvailable ? 1 : 0) + ((updateError && !updateLoading) ? 1 : 0) + (updateSuccess ? 1 : 0)
                     ) * 2.75 + 'rem' }}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} commitWords={commitWords} uploadAudio={isAdmin ? uploadAudioToCloud : undefined} frames={frames} setFrames={setFrames} commitFrames={commitFrames} isAdmin={isAdmin} setIsAdmin={setIsAdmin} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} commitWords={commitWords} uploadAudio={isAdmin ? uploadAudioToCloud : undefined} frames={frames} setFrames={setFrames} commitFrames={commitFrames} isAdmin={isAdmin} setIsAdmin={setIsAdmin} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} archive={archive} archiveItem={archiveItem} restoreArchived={restoreArchived} dropArchived={dropArchived} clearArchive={clearArchive} syncState={syncState} availableAudioKeys={availableAudioKeys} audioMigrated={audioMigrated} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} frames={frames} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -2425,6 +2522,18 @@
                             <span className="text-6xl">{currentTheme === 'girl' ? '👧🏾' : '👦🏾'}</span>
                             Let's Play!
                         </button>
+
+                        <div className="w-full max-w-xs">
+                            <p className="text-center text-white/70 font-bold text-xs mb-2 tracking-widest">CHOOSE YOUR WORLD</p>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button onClick={() => changeTheme('boy')} className={`rounded-2xl px-2 py-3 font-bold text-sm flex flex-col items-center gap-1 transition-all ${currentTheme === 'boy' ? 'bg-white text-gray-800 scale-105 shadow-lg' : 'bg-white/15 text-white border border-white/25 hover:bg-white/25'}`}>
+                                    <span className="text-3xl">🚀</span> Adventure Explorer
+                                </button>
+                                <button onClick={() => changeTheme('girl')} className={`rounded-2xl px-2 py-3 font-bold text-sm flex flex-col items-center gap-1 transition-all ${currentTheme === 'girl' ? 'bg-white text-gray-800 scale-105 shadow-lg' : 'bg-white/15 text-white border border-white/25 hover:bg-white/25'}`}>
+                                    <span className="text-3xl">🦄</span> Magical World
+                                </button>
+                            </div>
+                        </div>
 
                         {stickers.length > 0 && (
                             <div className="bg-white/20 backdrop-blur px-5 py-2 rounded-full text-white font-bold text-lg">
@@ -2502,7 +2611,7 @@
         // Parent Zone authoring for sentence frames. Each frame is a template with a
         // small set of fillers; each filler gets a full-sentence recording per language
         // through the same VoiceRecorder used for words (keyed sf_<frameId>_<fillerId>).
-        const PhraseManager = ({ frames, setFrames, playAudio, clearCache, isAdmin, uploadAudio }) => {
+        const PhraseManager = ({ frames, setFrames, playAudio, clearCache, isAdmin, uploadAudio, archiveItem, availableAudioKeys }) => {
             const [expandedId, setExpandedId] = useState(null);
             const [newFrame, setNewFrame] = useState({ en: '', yoruba: '', gungbe: '' });
             const [newFiller, setNewFiller] = useState({});
@@ -2529,7 +2638,9 @@
             };
 
             const deleteFrame = async (id) => {
-                if (!(await appConfirm('Delete this whole phrase and its recordings?', { danger: true, confirmLabel: 'Delete' }))) return;
+                if (!(await appConfirm('Delete this whole phrase? You can restore it from Settings > Archive.', { danger: true, confirmLabel: 'Delete' }))) return;
+                const f = frames.find(x => x.id === id);
+                if (f && archiveItem) archiveItem({ type: 'frame', label: f.en || 'Phrase', data: JSON.parse(JSON.stringify(f)) });
                 commitFrames(frames.filter(f => f.id !== id));
             };
 
@@ -2543,6 +2654,12 @@
             };
 
             const deleteFiller = (frameId, fillerId) => {
+                const fr = frames.find(f => f.id === frameId);
+                const fil = fr && fr.fillers.find(x => x.id === fillerId);
+                if (fil && archiveItem) {
+                    const label = (fr.en && fr.en.includes('___')) ? fr.en.replace('___', fil.en) : (fil.en || 'Word');
+                    archiveItem({ type: 'filler', frameId, label, data: { ...fil } });
+                }
                 commitFrames(frames.map(f => f.id === frameId ? { ...f, fillers: f.fillers.filter(x => x.id !== fillerId) } : f));
             };
 
@@ -2681,7 +2798,15 @@
                                                             ? <video src={gifUrl(filler.imageUrl)} muted loop autoPlay playsInline style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0, background: '#000' }} onError={e => { e.target.style.display = 'none'; }} />
                                                             : <img src={gifUrl(filler.imageUrl)} alt={filler.en} style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '8px', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />)}
                                                         <div style={{ flex: 1, minWidth: 0 }}>
-                                                            <div className="font-bold text-sm text-gray-800 truncate">{frame.en.includes('___') ? frame.en.replace('___', filler.en) : frame.en + ' ' + filler.en}</div>
+                                                            <div className="font-bold text-sm text-gray-800 truncate flex items-center gap-1.5">
+                                                                <span className="truncate">{frame.en.includes('___') ? frame.en.replace('___', filler.en) : frame.en + ' ' + filler.en}</span>
+                                                                {(() => {
+                                                                    const mY = availableAudioKeys && !availableAudioKeys.has(baseId + '_yoruba');
+                                                                    const mG = availableAudioKeys && !availableAudioKeys.has(baseId + '_gungbe');
+                                                                    if (!mY && !mG) return null;
+                                                                    return <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5 shrink-0" title={'Missing recording: ' + [mY && 'Yoruba', mG && 'Gungbe'].filter(Boolean).join(' and ')}><Icon name="Mic" size={10}/> {mY && mG ? 'no audio' : 'no ' + (mY ? 'Y' : 'G')}</span>;
+                                                                })()}
+                                                            </div>
                                                             <div className="text-[11px] text-gray-500 truncate">{(frame.yoruba.includes('___') ? frame.yoruba.replace('___', filler.yoruba || '?') : frame.yoruba + ' ' + (filler.yoruba || '?'))} • {(frame.gungbe.includes('___') ? frame.gungbe.replace('___', filler.gungbe || '?') : frame.gungbe + ' ' + (filler.gungbe || '?'))}</div>
                                                         </div>
                                                         {isAdmin && (
@@ -2865,7 +2990,7 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, commitWords, uploadAudio, frames, setFrames, commitFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
+        const ParentManager = ({ words, setWords, commitWords, uploadAudio, frames, setFrames, commitFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, archive, archiveItem, restoreArchived, dropArchived, clearArchive, syncState, availableAudioKeys, audioMigrated, onBack }) => {
             const [view, setView] = useState('words');
             const [passInput, setPassInput] = useState('');
             const ADMIN_VIEWS = ['stories'];
@@ -2903,6 +3028,7 @@
             // to the cloud so other devices can fetch them. After this, adding a word
             // and recording it syncs automatically, so these are needed only once.
             const [cloudBusy, setCloudBusy] = useState(false);
+            const [syncExpanded, setSyncExpanded] = useState(false);
             const [cloudMsg, setCloudMsg] = useState('');
             const [cloudProgress, setCloudProgress] = useState(0);
 
@@ -3010,6 +3136,8 @@
             };
 
             const confirmDelete = (id) => {
+                const w = words.find(x => x.id === id);
+                if (w && archiveItem) archiveItem({ type: 'word', label: w.english || w.icon || 'Word', data: { ...w } });
                 (commitWords || setWords)(prev => prev.filter(w => w.id !== id));
                 setDeleteConfirmationId(null);
                 try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
@@ -3213,6 +3341,16 @@
                     <div className="flex items-center gap-3 mb-2">
                         <button onClick={onBack} className="bg-white p-3 rounded-full shadow text-gray-500 hover:bg-gray-50 transition-all">🏠</button>
                         <h1 className="text-xl font-black text-gray-700">Parent Zone 🛠️</h1>
+                        {(() => {
+                            const s = syncState || 'synced';
+                            const cfg = s === 'syncing' ? { c: '#f59e0b', t: 'Syncing…', pulse: true } : s === 'offline' ? { c: '#9ca3af', t: 'Offline' } : { c: '#22c55e', t: 'Synced' };
+                            return (
+                                <div className="flex items-center gap-1.5 bg-white rounded-full shadow-sm px-2.5 py-1" style={{ marginLeft: 'auto' }} title={s === 'offline' ? 'No connection. Changes save on this device and upload when you are back online.' : (s === 'syncing' ? 'Saving your changes to the cloud…' : 'All changes are saved to the cloud.')}>
+                                    <span className={cfg.pulse ? 'animate-pulse-gentle' : ''} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: cfg.c }}></span>
+                                    <span className="text-[11px] font-bold" style={{ color: cfg.c }}>{cfg.t}</span>
+                                </div>
+                            );
+                        })()}
                     </div>
                     <div className="flex gap-1 mb-4 bg-white p-1.5 rounded-xl shadow-sm">
                         <button onClick={() => setView('words')} className={`flex-1 py-2 rounded-lg font-bold text-xs ${view === 'words' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`}>Words</button>
@@ -3223,7 +3361,7 @@
                     </div>
 
                     {view === 'phrases' && (
-                        <PhraseManager frames={frames} setFrames={commitFrames || setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} uploadAudio={uploadAudio} />
+                        <PhraseManager frames={frames} setFrames={commitFrames || setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} uploadAudio={uploadAudio} archiveItem={archiveItem} availableAudioKeys={availableAudioKeys} />
                     )}
 
                     {view === 'settings' && (
@@ -3254,17 +3392,26 @@
                             {isAdmin && (
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
                                 <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Upload" className="text-teal-500" /> Cloud Sync</h2>
-                                <p className="text-xs text-gray-500 mb-3" style={{ fontFamily: 'sans-serif' }}>Words and recordings now sync live to all devices through the cloud. Adding a word and recording it uploads automatically. Use these once to move everything already on this device up to the cloud.</p>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button onClick={handlePublishWords} disabled={cloudBusy} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="Upload" size={16}/> Publish all words</button>
-                                    <button onClick={handleUploadAllAudio} disabled={cloudBusy} className="bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="Upload" size={16}/> Upload all audio</button>
-                                </div>
-                                {cloudBusy && cloudProgress > 0 && (
-                                    <div className="mt-2 h-2 w-full bg-teal-100 rounded-full overflow-hidden">
-                                        <div className="h-full bg-teal-500 transition-all duration-200" style={{ width: (cloudProgress || 3) + '%' }}></div>
+                                {(audioMigrated && !syncExpanded && !cloudBusy) ? (
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm font-bold text-teal-600 flex items-center gap-1">☁️ All words and recordings synced</span>
+                                        <button onClick={() => setSyncExpanded(true)} className="text-xs font-bold text-teal-600 hover:underline" style={{ marginLeft: 'auto' }}>Sync now</button>
                                     </div>
+                                ) : (
+                                    <>
+                                        <p className="text-xs text-gray-500 mb-3" style={{ fontFamily: 'sans-serif' }}>Words and recordings sync live to all devices automatically. These buttons force a full push of everything on this device, e.g. after a big import.</p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button onClick={handlePublishWords} disabled={cloudBusy} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="Upload" size={16}/> Publish all words</button>
+                                            <button onClick={handleUploadAllAudio} disabled={cloudBusy} className="bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="Upload" size={16}/> Upload all audio</button>
+                                        </div>
+                                        {cloudBusy && cloudProgress > 0 && (
+                                            <div className="mt-2 h-2 w-full bg-teal-100 rounded-full overflow-hidden">
+                                                <div className="h-full bg-teal-500 transition-all duration-200" style={{ width: (cloudProgress || 3) + '%' }}></div>
+                                            </div>
+                                        )}
+                                        {cloudMsg && <p className="text-xs text-teal-600 font-bold mt-2 text-center">{cloudMsg}</p>}
+                                    </>
                                 )}
-                                {cloudMsg && <p className="text-xs text-teal-600 font-bold mt-2 text-center">{cloudMsg}</p>}
                             </div>
                             )}
                             {isAdmin && (
@@ -3279,6 +3426,35 @@
                                     <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                 </div>
                                 <p className="text-xs text-gray-400 mt-2" style={{ fontFamily: 'sans-serif' }}>Words and recordings sync live through the cloud. These are just a downloadable snapshot for your own records.</p>
+                            </div>
+                            )}
+                            {isAdmin && (
+                            <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                                <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Trash2" className="text-amber-500" /> Archive <span className="text-xs font-bold text-gray-400">({archive ? archive.length : 0})</span></h2>
+                                {(!archive || archive.length === 0) ? (
+                                    <p className="text-xs text-gray-400" style={{ fontFamily: 'sans-serif' }}>Deleted words and phrases land here so you can restore them or remove them for good. Nothing archived right now.</p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <div className="flex justify-end">
+                                            <button onClick={async () => { if (await appConfirm('Permanently delete everything in the archive? This cannot be undone.', { danger: true, confirmLabel: 'Empty archive' })) clearArchive(); }} className="text-xs font-bold text-red-500 hover:underline">Empty archive</button>
+                                        </div>
+                                        {archive.map(entry => {
+                                            const kind = entry.type === 'frame' ? 'phrase' : entry.type === 'filler' ? 'phrase word' : 'word';
+                                            const chip = entry.type === 'frame' ? { bg: '#ccfbf1', fg: '#0f766e' } : entry.type === 'filler' ? { bg: '#ede9fe', fg: '#6d28d9' } : { bg: '#dbeafe', fg: '#1d4ed8' };
+                                            return (
+                                                <div key={entry.uid} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
+                                                    <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0" style={{ background: chip.bg, color: chip.fg }}>{kind}</span>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="text-sm font-bold text-gray-700 truncate">{entry.label || '(untitled)'}</div>
+                                                        <div className="text-[10px] text-gray-400">Deleted {new Date(entry.deletedAt).toLocaleDateString()}</div>
+                                                    </div>
+                                                    <button onClick={() => restoreArchived(entry.uid)} className="text-xs font-bold text-green-600 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg flex items-center gap-1 shrink-0"><Icon name="RotateCcw" size={14}/> Restore</button>
+                                                    <button onClick={async () => { if (await appConfirm('Permanently delete this item? This cannot be undone.', { danger: true, confirmLabel: 'Delete' })) dropArchived(entry.uid); }} className="text-red-400 hover:bg-red-50 p-1 rounded-lg shrink-0" title="Delete forever"><Icon name="X" size={16}/></button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                             )}
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
@@ -3413,12 +3589,22 @@
                                         );
                                     }
 
+                                    const missY = availableAudioKeys && !availableAudioKeys.has(word.id + '_yoruba');
+                                    const missG = availableAudioKeys && !availableAudioKeys.has(word.id + '_gungbe');
+                                    const missingLangs = [missY && 'Yoruba', missG && 'Gungbe'].filter(Boolean);
                                     return (
                                         <div key={word.id} className="flex items-center justify-between bg-white p-2 rounded border shadow-sm gap-2" style={{ flexWrap: 'wrap' }}>
                                             <div className="flex items-center gap-3 overflow-hidden" style={{ flex: '1 1 60%', minWidth: '160px' }}>
                                                 <span className="text-2xl min-w-[30px] text-center">{word.icon}</span>
                                                 <div className="overflow-hidden" style={{ minWidth: 0 }}>
-                                                    <div className="font-bold truncate">{word.english}</div>
+                                                    <div className="font-bold truncate flex items-center gap-1.5">
+                                                        {word.english}
+                                                        {missingLangs.length > 0 && (
+                                                            <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5 shrink-0" title={'Missing recording: ' + missingLangs.join(' and ')}>
+                                                                <Icon name="Mic" size={10}/> {missY && missG ? 'no audio' : 'no ' + (missY ? 'Y' : 'G')}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     <div className="text-xs text-gray-500 truncate">{word.yoruba} • {word.gungbe}</div>
                                                 </div>
                                             </div>
