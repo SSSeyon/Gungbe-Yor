@@ -1145,7 +1145,11 @@
                 cardBorder: 'border-blue-200',
                 quizOptionBorder: 'border-indigo-200',
                 bgIcons: ['🚀', '🦕', '⚽', '🏎️', '🪐', '🎮', '👾', '⚓', '🚲', '🚁', '⛺', '🦖', '🤖', '🛹', '🗺️', '🦁'],
-                buttonClass: 'bg-gradient-to-b from-blue-400 to-blue-600 shadow-[0_4px_0_rgb(30,58,138)] active:shadow-none active:translate-y-[4px]'
+                buttonClass: 'bg-gradient-to-b from-blue-400 to-blue-600 shadow-[0_4px_0_rgb(30,58,138)] active:shadow-none active:translate-y-[4px]',
+                // Vivid immersive gradient for the landing screen only (the pastel
+                // bgGradient above is for the in-app Background layer). Keeps the
+                // "Choose your world" picker visually in sync with what it selects.
+                landingGradient: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 45%, #38bdf8 100%)'
             },
             girl: {
                 id: 'girl',
@@ -1160,7 +1164,8 @@
                 cardBorder: 'border-pink-200',
                 quizOptionBorder: 'border-purple-200',
                 bgIcons: ['🦄', '👑', '🌈', '🦋', '🍭', '💖', '🧚‍♀️', '🏰', '🧜‍♀️', '🎀', '🌸', '🧁', '🎠', '✨', '💎', '🩰'],
-                buttonClass: 'bg-gradient-to-b from-pink-400 to-pink-600 shadow-[0_4px_0_rgb(157,23,77)] active:shadow-none active:translate-y-[4px]'
+                buttonClass: 'bg-gradient-to-b from-pink-400 to-pink-600 shadow-[0_4px_0_rgb(157,23,77)] active:shadow-none active:translate-y-[4px]',
+                landingGradient: 'linear-gradient(135deg, #6d28d9 0%, #db2777 45%, #f9a8d4 100%)'
             }
         };
 
@@ -1572,7 +1577,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.12.0';
+        const APP_VERSION = '2.12.1';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -2488,11 +2493,14 @@
                 else { appAlert("Oops! Try again."); setAnswer(''); }
             };
 
-            const floatingEmojis = ['🌟','🎈','🦁','🌈','🎵','🐘','🦋','🌸','⭐','🎉'];
+            // Floating emojis and the backdrop gradient come from the SELECTED theme
+            // (THEMES.boy / THEMES.girl), so the "Choose your world" picker below
+            // visibly changes this screen instead of only tinting the picker itself.
+            const floatingEmojis = theme.bgIcons.slice(0, 10);
 
             return (
-                <div className="relative min-h-screen flex flex-col items-center justify-between overflow-hidden"
-                    style={{background: 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)'}}>
+                <div className="relative min-h-screen flex flex-col items-center justify-between overflow-hidden transition-all duration-700"
+                    style={{background: theme.landingGradient}}>
 
                     {floatingEmojis.map((emoji, i) => (
                         <div key={i} className="absolute text-4xl pointer-events-none animate-float opacity-40"
