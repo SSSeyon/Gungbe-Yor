@@ -839,6 +839,108 @@
             );
         });
 
+        // --- WORD + AUDIO CLOUD SYNC (Firestore) ----------------------------
+        // Words live text-only in ONE Firestore doc (ll_config/words), synced
+        // live across devices exactly like phrase frames. Audio clips live one
+        // per document in the audio_clips collection (base64), the same
+        // chunk-in-Firestore trick the stories already use. This replaces the
+        // 26MB words.json monolith: a device fetches ONLY the clips it lacks, and
+        // an admin can add a word on any device and have it go live instantly.
+        // Firebase Storage is deliberately NOT used here (that bucket needs a
+        // billing plan); Firestore is on the free tier and already in use.
+
+        // Normalise words into a plain, Firestore-safe shape (no undefined values,
+        // which Firestore rejects). Mirror of sanitiseFrames. If you add a word
+        // field, add it here too or it will not sync.
+        const sanitiseWords = (words) => {
+            if (!Array.isArray(words)) return [];
+            return words.map(w => ({
+                id: String(w && w.id != null ? w.id : ''),
+                english: String(w && w.english != null ? w.english : ''),
+                yoruba: String(w && w.yoruba != null ? w.yoruba : ''),
+                gungbe: String(w && w.gungbe != null ? w.gungbe : ''),
+                category: String(w && w.category != null ? w.category : ''),
+                icon: String(w && w.icon != null ? w.icon : '')
+            })).filter(w => w.id);
+        };
+
+        const fsSaveWords = async (words) => {
+            if (!db) return;
+            const clean = sanitiseWords(words);
+            await db.collection('ll_config').doc('words').set({ words: clean, updatedAt: Date.now() }, { merge: true });
+        };
+
+        // Real-time words listener (mirror of fsListenFrames). Fires immediately
+        // with the current cloud value and again the instant any device saves.
+        const fsListenWords = (onWords) => {
+            if (!db) return () => {};
+            try {
+                return db.collection('ll_config').doc('words').onSnapshot(
+                    snap => {
+                        if (snap && snap.exists) {
+                            const data = snap.data();
+                            if (data && Array.isArray(data.words)) onWords(data.words);
+                        }
+                    },
+                    err => { try { console.warn('Words listener error:', err && err.code, err && err.message); } catch (_) {} }
+                );
+            } catch (e) { return () => {}; }
+        };
+
+        // Save one audio clip (Blob) as a Firestore document (base64), keyed by the
+        // audio key (<wordId>_<lang> or sf_<frameId>_<fillerId>_<lang>), and record
+        // that key in ll_config/audio so other devices know to fetch it. Clips are
+        // small (a few seconds of webm) and stay well under the 1MB doc limit; a
+        // clip that somehow exceeds it is skipped rather than throwing.
+        const fsSaveAudioClip = async (key, blob) => {
+            if (!db) return false;
+            const base64 = await blobToBase64(blob);
+            if (base64.length > 950000) { try { console.warn('Audio clip too large to sync:', key, base64.length); } catch (_) {} return false; }
+            const hash = await hashString(base64);
+            await db.collection('audio_clips').doc(key).set({ data: base64, hash, updatedAt: Date.now() }, { merge: true });
+            await db.collection('ll_config').doc('audio').set(
+                { keys: firebase.firestore.FieldValue.arrayUnion(key), updatedAt: Date.now() },
+                { merge: true }
+            );
+            return true;
+        };
+
+        // Fetch one audio clip's base64 data URI from Firestore (or null).
+        const fsGetAudioClip = async (key) => {
+            if (!db) return null;
+            try {
+                const snap = await db.collection('audio_clips').doc(key).get();
+                if (snap.exists && snap.data() && snap.data().data) return snap.data().data;
+            } catch (e) {}
+            return null;
+        };
+
+        // Add a batch of audio keys to the ll_config/audio index in one write.
+        // Used by the one-time migration after all clips are uploaded.
+        const fsAddAudioKeys = async (keys) => {
+            if (!db || !keys || !keys.length) return;
+            await db.collection('ll_config').doc('audio').set(
+                { keys: firebase.firestore.FieldValue.arrayUnion(...keys.map(String)), updatedAt: Date.now() },
+                { merge: true }
+            );
+        };
+
+        // Real-time listener for the set of audio keys that exist in the cloud.
+        const fsListenAudioKeys = (onKeys) => {
+            if (!db) return () => {};
+            try {
+                return db.collection('ll_config').doc('audio').onSnapshot(
+                    snap => {
+                        if (snap && snap.exists) {
+                            const data = snap.data();
+                            if (data && Array.isArray(data.keys)) onKeys(data.keys);
+                        }
+                    },
+                    err => { try { console.warn('Audio keys listener error:', err && err.code, err && err.message); } catch (_) {} }
+                );
+            } catch (e) { return () => {}; }
+        };
+
         // --- FIRESTORE STORY SYNC HELPERS ---
         // Story HTML is chunked across Firestore documents (1MB per doc limit),
         // so no Firebase Storage CORS configuration is required. Metadata lives
@@ -1451,7 +1553,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.9.10';
+        const APP_VERSION = '2.10.0';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1605,6 +1707,15 @@
             useEffect(() => { modeRef.current = mode; }, [mode]);
             const [words, setWords] = useState([]);
             const [audioCache, setAudioCache] = useState({});
+            // The set of audio keys that exist in the cloud (Firestore audio_clips).
+            // Seeded from a localStorage cache so playback fallback works offline on
+            // a device that has synced before, then kept live by fsListenAudioKeys.
+            const [cloudAudioKeys, setCloudAudioKeys] = useState(() => {
+                try { const s = JSON.parse(localStorage.getItem('ll_cloud_audio_keys') || 'null'); return Array.isArray(s) ? s : []; }
+                catch (e) { return []; }
+            });
+            const cloudAudioKeysRef = useRef(cloudAudioKeys);
+            useEffect(() => { cloudAudioKeysRef.current = cloudAudioKeys; }, [cloudAudioKeys]);
             const [currentTheme, setCurrentTheme] = useState('boy');
             const [stickers, setStickers] = useState([]);
             const [stats, setStats] = useState({ correct: 0, incorrect: 0, categories: {} });
@@ -1982,6 +2093,113 @@
                 return () => { try { unsubscribe(); } catch (e) {} };
             }, [mergeRemoteFrames]);
 
+            // Apply a word-list change locally AND push it to the cloud. Use this for
+            // ADMIN edits (add/edit/delete) only. The passive [words] effect below
+            // writes localStorage but never the cloud, so a remote-sourced update
+            // (or a plain load) never echoes back and clobbers another device.
+            const commitWords = (updater) => {
+                setWords(prev => {
+                    const next = typeof updater === 'function' ? updater(prev) : updater;
+                    try { localStorage.setItem('littleLinguistWords_v3', JSON.stringify(next)); } catch (e) {}
+                    fsSaveWords(next).catch(e => { try { console.warn('Words cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
+                    return next;
+                });
+            };
+
+            // Push one just-recorded clip to the cloud (Firestore) and remember its
+            // key locally so playback fallback knows it exists. Best-effort: a failure
+            // is logged, never thrown, so recording still works offline.
+            const uploadAudioToCloud = async (key, blob) => {
+                try {
+                    const ok = await fsSaveAudioClip(key, blob);
+                    if (ok) setCloudAudioKeys(prev => {
+                        if (prev.includes(key)) return prev;
+                        const next = [...prev, key];
+                        try { localStorage.setItem('ll_cloud_audio_keys', JSON.stringify(next)); } catch (e) {}
+                        return next;
+                    });
+                } catch (e) { try { console.warn('Audio cloud upload failed:', key, e && e.message); } catch (_) {} }
+            };
+
+            // Reconcile the cloud words doc into local state. Once the doc exists the
+            // cloud is the source of truth, so we REPLACE local with it (this is what
+            // makes adds, edits AND deletes from the admin device all propagate).
+            // Guarded by a value compare so an echo of our own save is a no-op, and by
+            // an empty-guard so an accidentally-emptied cloud can never wipe a device.
+            const mergeRemoteWords = React.useCallback((remote) => {
+                if (!remote || !Array.isArray(remote) || remote.length === 0) return;
+                setWords(local => {
+                    const clean = remote.map(r => ({
+                        id: String(r && r.id != null ? r.id : ''),
+                        english: String(r && r.english != null ? r.english : ''),
+                        yoruba: String(r && r.yoruba != null ? r.yoruba : ''),
+                        gungbe: String(r && r.gungbe != null ? r.gungbe : ''),
+                        category: String(r && r.category != null ? r.category : ''),
+                        icon: String(r && r.icon != null ? r.icon : '')
+                    })).filter(w => w.id);
+                    if (JSON.stringify(clean) === JSON.stringify(local)) return local;
+                    try { localStorage.setItem('littleLinguistWords_v3', JSON.stringify(clean)); } catch (e) {}
+                    return clean;
+                });
+            }, []);
+
+            // Live sync: words doc + the audio-keys index. Both mirror the frames
+            // listener above, and both cache to localStorage so the app still works
+            // offline from the last-known cloud state.
+            useEffect(() => {
+                const unsubW = fsListenWords(mergeRemoteWords);
+                const unsubK = fsListenAudioKeys((keys) => {
+                    setCloudAudioKeys(keys);
+                    try { localStorage.setItem('ll_cloud_audio_keys', JSON.stringify(keys)); } catch (e) {}
+                });
+                return () => { try { unsubW(); } catch (e) {} try { unsubK(); } catch (e) {} };
+            }, [mergeRemoteWords]);
+
+            // Background prefetch: pull any cloud audio clips this device does not yet
+            // have into IndexedDB, a few at a time, so the child can play them offline
+            // later. Playback also has an on-demand fallback (handleAudioPlay) so a
+            // fresh clip is audible before this finishes. Runs whenever the cloud key
+            // set changes; skips clips already stored.
+            const prefetchingRef = useRef(false);
+            useEffect(() => {
+                if (!cloudAudioKeys.length) return;
+                let cancelled = false;
+                (async () => {
+                    if (prefetchingRef.current) return;
+                    prefetchingRef.current = true;
+                    try {
+                        let localKeys = new Set();
+                        try {
+                            const dbi = await initDB();
+                            localKeys = new Set(await new Promise((resolve) => {
+                                const tx = dbi.transaction([STORE_NAME], 'readonly');
+                                const req = tx.objectStore(STORE_NAME).getAllKeys();
+                                req.onsuccess = () => resolve(req.result || []);
+                                req.onerror = () => resolve([]);
+                            }));
+                        } catch (e) {}
+                        const missing = cloudAudioKeys.filter(k => !localKeys.has(k));
+                        let i = 0;
+                        const worker = async () => {
+                            while (i < missing.length && !cancelled) {
+                                const key = missing[i++];
+                                try {
+                                    const base64 = await fsGetAudioClip(key);
+                                    if (base64) {
+                                        const blob = base64ToBlob(base64);
+                                        if (blob) await saveAudioBlob(key, blob);
+                                    }
+                                } catch (e) {}
+                            }
+                        };
+                        await Promise.all([worker(), worker(), worker(), worker()]);
+                    } finally {
+                        prefetchingRef.current = false;
+                    }
+                })();
+                return () => { cancelled = true; };
+            }, [cloudAudioKeys]);
+
             useEffect(() => { if(words.length) localStorage.setItem('littleLinguistWords_v3', JSON.stringify(words)); }, [words]);
             useEffect(() => localStorage.setItem('littleLinguistTheme', currentTheme), [currentTheme]);
             useEffect(() => localStorage.setItem('ll_stickers', JSON.stringify(stickers)), [stickers]);
@@ -2012,7 +2230,20 @@
                     return;
                 }
                 try {
-                    const blob = await getAudioBlob(audioKey);
+                    let blob = await getAudioBlob(audioKey);
+                    // Not stored yet, but the cloud has it: fetch on demand so a clip
+                    // added on another device is audible immediately, and cache it in
+                    // IndexedDB so the next tap is instant and works offline.
+                    if (!blob && cloudAudioKeysRef.current.includes(audioKey)) {
+                        try {
+                            const base64 = await fsGetAudioClip(audioKey);
+                            const cloudBlob = base64 ? base64ToBlob(base64) : null;
+                            if (cloudBlob) {
+                                saveAudioBlob(audioKey, cloudBlob).catch(() => {});
+                                blob = cloudBlob;
+                            }
+                        } catch (e) {}
+                    }
                     if (blob) {
                         const url = URL.createObjectURL(blob);
                         setAudioCache(prev => ({ ...prev, [audioKey]: url }));
@@ -2098,7 +2329,7 @@
                         (appUpdate ? 1 : 0) + (updateAvailable ? 1 : 0) + ((updateError && !updateLoading) ? 1 : 0) + (updateSuccess ? 1 : 0)
                     ) * 2.75 + 'rem' }}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} frames={frames} setFrames={setFrames} isAdmin={isAdmin} setIsAdmin={setIsAdmin} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} commitWords={commitWords} uploadAudio={isAdmin ? uploadAudioToCloud : undefined} frames={frames} setFrames={setFrames} isAdmin={isAdmin} setIsAdmin={setIsAdmin} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} frames={frames} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -2247,7 +2478,7 @@
         // Parent Zone authoring for sentence frames. Each frame is a template with a
         // small set of fillers; each filler gets a full-sentence recording per language
         // through the same VoiceRecorder used for words (keyed sf_<frameId>_<fillerId>).
-        const PhraseManager = ({ frames, setFrames, playAudio, clearCache, isAdmin }) => {
+        const PhraseManager = ({ frames, setFrames, playAudio, clearCache, isAdmin, uploadAudio }) => {
             const [expandedId, setExpandedId] = useState(null);
             const [newFrame, setNewFrame] = useState({ en: '', yoruba: '', gungbe: '' });
             const [newFiller, setNewFiller] = useState({});
@@ -2432,8 +2663,8 @@
                                                         {isAdmin && (
                                                         <div className="flex gap-1 items-center" style={{ marginLeft: 'auto' }}>
                                                             <button onClick={() => startEditFiller(filler)} className="text-teal-500 p-1 hover:bg-teal-50 rounded" title="Edit word"><Icon name="Edit" size={14}/></button>
-                                                            <VoiceRecorder wordId={baseId} lang="yoruba" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'yoruba')} label="Y"/>
-                                                            <VoiceRecorder wordId={baseId} lang="gungbe" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'gungbe')} label="G"/>
+                                                            <VoiceRecorder wordId={baseId} lang="yoruba" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'yoruba')} label="Y" uploadAudio={uploadAudio}/>
+                                                            <VoiceRecorder wordId={baseId} lang="gungbe" textToSpeak={''} playAudio={playAudio} onRecordComplete={() => clearCache(baseId, 'gungbe')} label="G" uploadAudio={uploadAudio}/>
                                                             <button onClick={() => deleteFiller(frame.id, filler.id)} className="text-red-400 p-1 hover:bg-red-50 rounded"><Icon name="X" size={16}/></button>
                                                         </div>
                                                         )}
@@ -2610,7 +2841,7 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, frames, setFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
+        const ParentManager = ({ words, setWords, commitWords, uploadAudio, frames, setFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
             const [view, setView] = useState('words');
             const [passInput, setPassInput] = useState('');
             const ADMIN_VIEWS = ['stories'];
@@ -2643,6 +2874,46 @@
                 return () => clearInterval(t);
             }, []);
 
+            // One-time cloud migration (admin). "Publish words" writes the whole word
+            // list to the live Firestore doc; "Upload audio" pushes every local clip
+            // to the cloud so other devices can fetch them. After this, adding a word
+            // and recording it syncs automatically, so these are needed only once.
+            const [cloudBusy, setCloudBusy] = useState(false);
+            const [cloudMsg, setCloudMsg] = useState('');
+            const [cloudProgress, setCloudProgress] = useState(0);
+
+            const handlePublishWords = async () => {
+                setCloudBusy(true); setCloudMsg('');
+                try { await fsSaveWords(words); setCloudMsg('Published ' + words.length + ' words to the cloud.'); }
+                catch (e) { setCloudMsg('Publish failed: ' + (e && e.message || e)); }
+                finally { setCloudBusy(false); }
+            };
+
+            const handleUploadAllAudio = async () => {
+                setCloudBusy(true); setCloudMsg(''); setCloudProgress(0);
+                try {
+                    const entries = await getAllAudioEntries();
+                    // Only real audio Blobs (word + sentence-frame recordings). Filler
+                    // images (sfimg_ keys) are strings and are skipped.
+                    const keys = Object.keys(entries).filter(k => (typeof entries[k] !== 'string') && /_(yoruba|gungbe)$/.test(k));
+                    if (!keys.length) { setCloudMsg('No local audio clips found to upload.'); setCloudBusy(false); return; }
+                    let done = 0;
+                    let i = 0;
+                    const uploaded = [];
+                    const worker = async () => {
+                        while (i < keys.length) {
+                            const k = keys[i++];
+                            try { await fsSaveAudioClip(k, entries[k]); uploaded.push(k); }
+                            catch (e) { try { console.warn('Clip upload failed:', k, e && e.message); } catch (_) {} }
+                            done++; setCloudProgress(Math.round(done / keys.length * 100));
+                        }
+                    };
+                    await Promise.all([worker(), worker(), worker()]);
+                    setCloudMsg('Uploaded ' + uploaded.length + ' of ' + keys.length + ' clips to the cloud.');
+                } catch (e) { setCloudMsg('Upload failed: ' + (e && e.message || e)); }
+                finally { setCloudBusy(false); }
+            };
+
             // Categories shown in Settings must match what the activities show, which
             // come from the actual words in the database, not a fixed list. Build the
             // set from the data (seeded with the common ones so the add/edit dropdowns
@@ -2662,7 +2933,10 @@
             const handleAddWord = () => {
                 if (!newWord.english) return;
                 const id = Date.now().toString();
-                setWords([{ ...newWord, id }, ...words]);
+                // commitWords pushes the change live to the cloud so other devices
+                // get the new word without a words.json export. It falls back to a
+                // plain local update if the cloud is unavailable.
+                (commitWords || setWords)(prev => [{ ...newWord, id }, ...prev]);
                 setNewWord({ english: '', yoruba: '', gungbe: '', category: 'Animals', icon: '❓' });
                 try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
             };
@@ -2674,7 +2948,7 @@
             };
 
             const saveEdit = () => {
-                setWords(words.map(w => w.id === editingId ? editForm : w));
+                (commitWords || setWords)(prev => prev.map(w => w.id === editingId ? editForm : w));
                 setEditingId(null);
                 setEditForm(null);
                 try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
@@ -2691,7 +2965,7 @@
             };
 
             const confirmDelete = (id) => {
-                setWords(words.filter(w => w.id !== id));
+                (commitWords || setWords)(prev => prev.filter(w => w.id !== id));
                 setDeleteConfirmationId(null);
                 try { localStorage.setItem('ll_words_dirty', '1'); } catch (e) {}
             };
@@ -2904,7 +3178,7 @@
                     </div>
 
                     {view === 'phrases' && (
-                        <PhraseManager frames={frames} setFrames={setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} />
+                        <PhraseManager frames={frames} setFrames={setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} uploadAudio={uploadAudio} />
                     )}
 
                     {view === 'settings' && (
@@ -2934,7 +3208,23 @@
                             <HealthCheck words={words} frames={frames} isAdmin={isAdmin} />
                             {isAdmin && (
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
-                                <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data</h2>
+                                <h2 className="text-lg font-bold text-gray-800 mb-2 flex items-center gap-2"><Icon name="Upload" className="text-teal-500" /> Cloud Sync</h2>
+                                <p className="text-xs text-gray-500 mb-3" style={{ fontFamily: 'sans-serif' }}>Words and recordings now sync live to all devices through the cloud. Adding a word and recording it uploads automatically. Use these once to move everything already on this device up to the cloud.</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button onClick={handlePublishWords} disabled={cloudBusy} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="Upload" size={16}/> Publish all words</button>
+                                    <button onClick={handleUploadAllAudio} disabled={cloudBusy} className="bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="Upload" size={16}/> Upload all audio</button>
+                                </div>
+                                {cloudBusy && cloudProgress > 0 && (
+                                    <div className="mt-2 h-2 w-full bg-teal-100 rounded-full overflow-hidden">
+                                        <div className="h-full bg-teal-500 transition-all duration-200" style={{ width: (cloudProgress || 3) + '%' }}></div>
+                                    </div>
+                                )}
+                                {cloudMsg && <p className="text-xs text-teal-600 font-bold mt-2 text-center">{cloudMsg}</p>}
+                            </div>
+                            )}
+                            {isAdmin && (
+                            <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+                                <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data (offline backup)</h2>
                                 {wordsDirty && (
                                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
                                         <p className="text-xs font-bold text-amber-700" style={{ fontFamily: 'sans-serif' }}>You have word changes that are only on this device.</p>
@@ -3119,8 +3409,8 @@
                                             <div className="flex gap-2 shrink-0" style={{ marginLeft: 'auto' }}>
                                                  {isAdmin && !isDeleting && (
                                                      <>
-                                                        <VoiceRecorder wordId={word.id} lang="yoruba" textToSpeak={word.yoruba} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'yoruba')} label="Y"/>
-                                                        <VoiceRecorder wordId={word.id} lang="gungbe" textToSpeak={word.gungbe} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'gungbe')} label="G"/>
+                                                        <VoiceRecorder wordId={word.id} lang="yoruba" textToSpeak={word.yoruba} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'yoruba')} label="Y" uploadAudio={uploadAudio}/>
+                                                        <VoiceRecorder wordId={word.id} lang="gungbe" textToSpeak={word.gungbe} playAudio={playAudio} onRecordComplete={() => clearCache(word.id, 'gungbe')} label="G" uploadAudio={uploadAudio}/>
                                                         <button onClick={() => startEdit(word)} className="text-blue-400 p-2 hover:bg-blue-50 rounded"><Icon name="Edit" size={16}/></button>
                                                         <button onClick={() => requestDelete(word.id)} className="text-red-400 p-2 hover:bg-red-50 rounded"><Icon name="Trash2" size={16}/></button>
                                                      </>
@@ -3143,7 +3433,7 @@
             );
         };
 
-        const VoiceRecorder = ({ wordId, lang, textToSpeak, playAudio, onRecordComplete, label }) => {
+        const VoiceRecorder = ({ wordId, lang, textToSpeak, playAudio, onRecordComplete, label, uploadAudio }) => {
              const [isRecording, setIsRecording] = useState(false);
              const [hasRec, setHasRec] = useState(false);
              const mediaRecorder = useRef(null);
@@ -3161,6 +3451,10 @@
                          mediaRecorder.current.onstop = async () => {
                              const blob = new Blob(chunks, { type: 'audio/webm' });
                              await saveAudioBlob(`${wordId}_${lang}`, blob); setHasRec(true); onRecordComplete();
+                             // Push the clip live to the cloud so every device gets it
+                             // without a words.json export. Admin devices only (the prop
+                             // is undefined otherwise); best-effort, never blocks recording.
+                             if (uploadAudio) uploadAudio(`${wordId}_${lang}`, blob);
                          };
                          mediaRecorder.current.start(); setIsRecording(true);
                      } catch(e) { appAlert("Mic Error"); }

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "little-linguist",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\sssey\\AppData\\Local\\Temp\\claude\\G--My-Drive-Personal-things-App-Yoruba-Learner-Gungbe-Yor\\63c64039-ebfd-4146-b1a1-c6628415e52d\\scratchpad\\serve.ps1"],
+      "port": 8971
+    }
+  ]
+}
