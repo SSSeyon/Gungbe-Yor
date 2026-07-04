@@ -868,6 +868,8 @@
             if (!db) return;
             const clean = sanitiseWords(words);
             await db.collection('ll_config').doc('words').set({ words: clean, updatedAt: Date.now() }, { merge: true });
+            // Remember what we sent so "Publish all words" can report already-up-to-date.
+            try { localStorage.setItem('ll_cloud_words_hash', await hashString(JSON.stringify(clean))); } catch (e) {}
         };
 
         // Real-time words listener (mirror of fsListenFrames). Fires immediately
@@ -892,6 +894,22 @@
         // that key in ll_config/audio so other devices know to fetch it. Clips are
         // small (a few seconds of webm) and stay well under the 1MB doc limit; a
         // clip that somehow exceeds it is skipped rather than throwing.
+        // Local record of which clips we have already pushed to the cloud and the
+        // content hash we pushed. Lets "Upload all audio" skip clips that are already
+        // up there unchanged, so re-running it only sends new or re-recorded clips
+        // instead of re-uploading everything. Keyed by audio key -> base64 hash.
+        const CLIP_HASH_KEY = 'll_cloud_clip_hashes';
+        const getUploadedClipHashes = () => {
+            try { return JSON.parse(localStorage.getItem(CLIP_HASH_KEY) || '{}') || {}; } catch (e) { return {}; }
+        };
+        const rememberUploadedClip = (key, hash) => {
+            try {
+                const m = getUploadedClipHashes();
+                m[key] = hash;
+                localStorage.setItem(CLIP_HASH_KEY, JSON.stringify(m));
+            } catch (e) {}
+        };
+
         const fsSaveAudioClip = async (key, blob) => {
             if (!db) return false;
             const base64 = await blobToBase64(blob);
@@ -902,6 +920,7 @@
                 { keys: firebase.firestore.FieldValue.arrayUnion(key), updatedAt: Date.now() },
                 { merge: true }
             );
+            rememberUploadedClip(key, hash);
             return true;
         };
 
@@ -1553,7 +1572,7 @@
         // App (code) version. Bump this on every index.html change. The matching
         // app.json on GitHub Pages holds the same number; launch compares them so a
         // device can be prompted to reload when a newer app is published.
-        const APP_VERSION = '2.10.0';
+        const APP_VERSION = '2.11.0';
         const REMOTE_APP_URL = 'https://ssseyon.github.io/Gungbe-Yor/app.json';
         // Sentence-frame filler GIFs/images live as real files in the GitHub Pages
         // GIFs/ folder, NOT embedded in words.json. Each filler stores only a filename
@@ -1744,11 +1763,12 @@
                 ];
             });
             useEffect(() => {
+                // Passive persistence ONLY: writes localStorage, never the cloud. Cloud
+                // writes happen exclusively from explicit admin edits via commitFrames
+                // below. This is what lets deletes stick: a remote-sourced merge (or a
+                // pack restore) updates local state without echoing back to Firestore
+                // and resurrecting a just-deleted phrase. Mirrors the [words] effect.
                 try { localStorage.setItem('ll_frames_v1', JSON.stringify(frames)); } catch (e) {}
-                // Also push to Firestore so other devices receive the latest frames
-                // without needing a words.json re-export. The pull happens on launch
-                // and on the 5-minute update timer via checkForUpdateRef.
-                fsSaveFrames(frames).catch(e => { try { console.warn('Frames cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
             }, [frames]);
             // Admin unlock for this session only. Gates Words, Phrases, Stories, and the
             // image/attachment part of Settings. Deliberately NOT persisted, so it resets
@@ -2063,28 +2083,25 @@
             // nothing differs it returns the same reference, so an echo of our own save
             // does not cause a needless re-render.
             const mergeRemoteFrames = React.useCallback((remote) => {
-                if (!remote || !Array.isArray(remote)) return;
+                if (!remote || !Array.isArray(remote) || remote.length === 0) return;
                 setFrames(local => {
-                    const localMap = new Map(local.map(f => [f.id, f]));
-                    let changed = false;
-                    const merged = local.map(f => {
-                        const rem = remote.find(r => r.id === f.id);
-                        if (!rem) return f;
-                        const remFillers = Array.isArray(rem.fillers) ? rem.fillers : [];
-                        const locFillers = Array.isArray(f.fillers) ? f.fillers : [];
-                        const remIds = new Set(remFillers.map(x => x.id));
-                        const localOnly = locFillers.filter(x => !remIds.has(x.id));
-                        const fillers = [...remFillers, ...localOnly];
-                        const next = { ...f, en: rem.en || f.en, yoruba: rem.yoruba || f.yoruba, gungbe: rem.gungbe || f.gungbe, fillers };
-                        if (JSON.stringify(next) !== JSON.stringify(f)) changed = true;
-                        return next;
-                    });
-                    const newOnes = remote.filter(r => !localMap.has(r.id));
-                    if (newOnes.length > 0) changed = true;
-                    if (!changed) return local;
-                    return [...merged, ...newOnes];
+                    const clean = sanitiseFrames(remote);
+                    // Compare canonical shapes so an echo of our own save (or a device
+                    // whose fillers simply lack the imageUrl key) is a no-op, not churn.
+                    if (JSON.stringify(clean) === JSON.stringify(sanitiseFrames(local))) return local;
+                    try { localStorage.setItem('ll_frames_v1', JSON.stringify(clean)); } catch (e) {}
+                    return clean;
                 });
             }, []);
+
+            // Apply a phrase-frame change locally AND push it to the cloud. Use this for
+            // ADMIN edits (add/edit/delete frames and fillers) only, exactly like
+            // commitWords. The passive [frames] effect writes localStorage but never the
+            // cloud, so a remote update or a pack restore never echoes back.
+            const commitFrames = (next) => {
+                setFrames(next);
+                fsSaveFrames(next).catch(e => { try { console.warn('Frames cloud-save failed:', e && e.code, e && e.message); } catch (_) {} });
+            };
 
             useEffect(() => {
                 // Real-time sync: fires immediately with the current cloud value and again
@@ -2206,7 +2223,14 @@
             useEffect(() => localStorage.setItem('ll_stats', JSON.stringify(stats)), [stats]);
             useEffect(() => localStorage.setItem('ll_settings', JSON.stringify(settings)), [settings]);
 
-            const changeTheme = (themeId) => setCurrentTheme(themeId);
+            // Boy icon -> Adventure Explorer, Girl icon -> Magical World (see THEMES).
+            // Persist the choice so the gender/theme picked on the landing screen sticks
+            // across reloads instead of resetting to the default each launch.
+            const changeTheme = (themeId) => {
+                if (!THEMES[themeId]) return;
+                setCurrentTheme(themeId);
+                try { localStorage.setItem('littleLinguistTheme', themeId); } catch (e) {}
+            };
             const theme = THEMES[currentTheme];
 
             const handleAudioPlay = async (wordId, lang) => {
@@ -2329,7 +2353,7 @@
                         (appUpdate ? 1 : 0) + (updateAvailable ? 1 : 0) + ((updateError && !updateLoading) ? 1 : 0) + (updateSuccess ? 1 : 0)
                     ) * 2.75 + 'rem' }}>
                         {mode === 'landing' && <Landing setMode={setModeWithHistory} theme={theme} changeTheme={changeTheme} currentTheme={currentTheme} stickers={stickers} />}
-                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} commitWords={commitWords} uploadAudio={isAdmin ? uploadAudioToCloud : undefined} frames={frames} setFrames={setFrames} isAdmin={isAdmin} setIsAdmin={setIsAdmin} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
+                        {mode === 'parent' && <ParentManager words={words} setWords={setWords} commitWords={commitWords} uploadAudio={isAdmin ? uploadAudioToCloud : undefined} frames={frames} setFrames={setFrames} commitFrames={commitFrames} isAdmin={isAdmin} setIsAdmin={setIsAdmin} playAudio={handleAudioPlay} clearCache={clearAudioCache} theme={theme} currentTheme={currentTheme} changeTheme={changeTheme} stats={stats} settings={settings} setSettings={setSettings} localVersion={localVersion} setLocalVersion={setLocalVersion} forcePull={forcePull} checkForUpdate={checkForUpdate} updateLoading={updateLoading} downloadProgress={downloadProgress} onBack={() => setModeWithHistory('landing')} />}
                         {mode === 'kid_dashboard' && <KidZone words={words} frames={frames} audioCache={audioCache} playAudio={handleAudioPlay} setMode={setModeWithHistory} registerBack={(fn) => { kidBackRef.current = fn; }} goHome={() => setModeWithHistory('landing')} theme={theme} stickers={stickers} setStickers={setStickers} stats={stats} updateStats={updateStats} settings={settings} />}
                     </div>
                 </div>
@@ -2841,7 +2865,7 @@
             );
         };
 
-        const ParentManager = ({ words, setWords, commitWords, uploadAudio, frames, setFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
+        const ParentManager = ({ words, setWords, commitWords, uploadAudio, frames, setFrames, commitFrames, isAdmin, setIsAdmin, playAudio, clearCache, theme, currentTheme, changeTheme, stats, settings, setSettings, localVersion, setLocalVersion, forcePull, checkForUpdate, updateLoading, downloadProgress, onBack }) => {
             const [view, setView] = useState('words');
             const [passInput, setPassInput] = useState('');
             const ADMIN_VIEWS = ['stories'];
@@ -2884,7 +2908,18 @@
 
             const handlePublishWords = async () => {
                 setCloudBusy(true); setCloudMsg('');
-                try { await fsSaveWords(words); setCloudMsg('Published ' + words.length + ' words to the cloud.'); }
+                try {
+                    // Skip the write entirely if the cloud already holds this exact list,
+                    // so re-tapping the button does nothing rather than a needless write.
+                    const hash = await hashString(JSON.stringify(sanitiseWords(words)));
+                    if (localStorage.getItem('ll_cloud_words_hash') === hash) {
+                        setCloudMsg('Words already up to date in the cloud.');
+                    } else {
+                        await fsSaveWords(words);
+                        try { localStorage.setItem('ll_cloud_words_hash', hash); } catch (e) {}
+                        setCloudMsg('Published ' + words.length + ' words to the cloud.');
+                    }
+                }
                 catch (e) { setCloudMsg('Publish failed: ' + (e && e.message || e)); }
                 finally { setCloudBusy(false); }
             };
@@ -2897,19 +2932,29 @@
                     // images (sfimg_ keys) are strings and are skipped.
                     const keys = Object.keys(entries).filter(k => (typeof entries[k] !== 'string') && /_(yoruba|gungbe)$/.test(k));
                     if (!keys.length) { setCloudMsg('No local audio clips found to upload.'); setCloudBusy(false); return; }
-                    let done = 0;
+                    const remembered = getUploadedClipHashes();
+                    let done = 0, uploaded = 0, skipped = 0, failed = 0;
                     let i = 0;
-                    const uploaded = [];
                     const worker = async () => {
                         while (i < keys.length) {
                             const k = keys[i++];
-                            try { await fsSaveAudioClip(k, entries[k]); uploaded.push(k); }
-                            catch (e) { try { console.warn('Clip upload failed:', k, e && e.message); } catch (_) {} }
+                            try {
+                                // Hash the current clip and compare with what we last sent.
+                                // Unchanged clips are skipped, so a re-run only pushes new
+                                // or re-recorded audio instead of the whole library.
+                                const base64 = await blobToBase64(entries[k]);
+                                const hash = await hashString(base64);
+                                if (remembered[k] === hash) { skipped++; }
+                                else if (await fsSaveAudioClip(k, entries[k])) { uploaded++; }
+                                else { failed++; }
+                            } catch (e) { failed++; try { console.warn('Clip upload failed:', k, e && e.message); } catch (_) {} }
                             done++; setCloudProgress(Math.round(done / keys.length * 100));
                         }
                     };
                     await Promise.all([worker(), worker(), worker()]);
-                    setCloudMsg('Uploaded ' + uploaded.length + ' of ' + keys.length + ' clips to the cloud.');
+                    let msg = 'Uploaded ' + uploaded + ' new/changed clip' + (uploaded === 1 ? '' : 's') + ', ' + skipped + ' already up to date.';
+                    if (failed) msg += ' ' + failed + ' failed.';
+                    setCloudMsg(msg);
                 } catch (e) { setCloudMsg('Upload failed: ' + (e && e.message || e)); }
                 finally { setCloudBusy(false); }
             };
@@ -3178,7 +3223,7 @@
                     </div>
 
                     {view === 'phrases' && (
-                        <PhraseManager frames={frames} setFrames={setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} uploadAudio={uploadAudio} />
+                        <PhraseManager frames={frames} setFrames={commitFrames || setFrames} playAudio={playAudio} clearCache={clearCache} isAdmin={isAdmin} uploadAudio={uploadAudio} />
                     )}
 
                     {view === 'settings' && (
@@ -3225,44 +3270,15 @@
                             {isAdmin && (
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
                                 <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2"><Icon name="Download" className="text-blue-500" /> Data (offline backup)</h2>
-                                {wordsDirty && (
-                                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
-                                        <p className="text-xs font-bold text-amber-700" style={{ fontFamily: 'sans-serif' }}>You have word changes that are only on this device.</p>
-                                        <p className="text-xs text-amber-600 mt-1" style={{ fontFamily: 'sans-serif' }}>To send them to your other devices: tap "Export Words + Audio" below, then upload the new words.json and version.json to GitHub. Other devices will be prompted to update on next launch.</p>
-                                    </div>
-                                )}
-                                <div className="flex items-center justify-between mb-2 bg-gray-50 px-3 py-2 rounded-lg">
+                                <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg">
                                     <span className="text-sm font-bold text-gray-500">App Version</span>
                                     <span className="text-sm font-black text-indigo-600">v{APP_VERSION}</span>
                                 </div>
-                                <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg">
-                                    <span className="text-sm font-bold text-gray-500">Data Pack Version</span>
-                                    <span className="text-sm font-black text-blue-600">{localVersion === 'none' ? 'No pack installed' : 'v' + localVersion}</span>
-                                </div>
-                                <div className="grid grid-cols-3 gap-2">
+                                <div className="grid grid-cols-2 gap-2">
                                     <button onClick={handleBackup} disabled={exporting} className="bg-blue-50 text-blue-600 p-2 rounded-lg border border-blue-100 font-bold hover:bg-blue-100 flex items-center justify-center gap-1 text-xs"><Icon name="FileJson" size={16}/> {exporting ? '...' : 'Export Words + Audio'}</button>
-                                    <div className="relative"><input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" /><button onClick={() => fileInputRef.current.click()} className="w-full h-full bg-green-50 text-green-600 p-2 rounded-lg border border-green-100 font-bold hover:bg-green-100 flex items-center justify-center gap-1 text-xs"><Icon name="Upload" size={16}/> Restore</button></div>
-                                    <button onClick={handleReset} className="bg-red-50 text-red-600 p-2 rounded-lg border border-red-100 font-bold hover:bg-red-100 flex items-center justify-center gap-1 text-xs"><Icon name="RotateCcw" size={16}/> Reset</button>
+                                    <button onClick={handleExportAudioOnly} disabled={exporting} className="bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
                                 </div>
-                                {versionHref ? (
-                                    <a href={versionHref} download="version.json"
-                                        className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs"
-                                        style={{ textDecoration: 'none' }}>
-                                        <Icon name="FileJson" size={16}/> Download version.json
-                                    </a>
-                                ) : (
-                                    <button onClick={handleExportVersion} disabled={exportingVersion} className="w-full mt-2 bg-teal-50 text-teal-700 p-2 rounded-lg border border-teal-100 font-bold hover:bg-teal-100 flex items-center justify-center gap-1 text-xs disabled:opacity-60"><Icon name="FileJson" size={16}/> {exportingVersion ? '...' : 'Export version.json (tap after Words + Audio)'}</button>
-                                )}
-                                <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: 'sans-serif' }}>Mobile only lets one file download per tap. Tap "Export Words + Audio" first, then this button, then upload both files to GitHub.</p>
-                                <div className="mt-2">
-                                    <button onClick={handleExportAudioOnly} disabled={exporting} className="w-full bg-purple-50 text-purple-600 p-2 rounded-lg border border-purple-100 font-bold hover:bg-purple-100 flex items-center justify-center gap-1 text-xs"><Icon name="Download" size={16}/> {exporting ? '...' : 'List Words w/ Audio'}</button>
-                                </div>
-                                {updateLoading && (
-                                    <div className="mt-2 h-2 w-full bg-teal-100 rounded-full overflow-hidden">
-                                        <div className="h-full bg-teal-500 transition-all duration-200" style={{ width: (downloadProgress || 3) + '%' }}></div>
-                                    </div>
-                                )}
-                                {pullMsg && <p className="text-xs text-teal-600 font-bold mt-1 text-center">{pullMsg}</p>}
+                                <p className="text-xs text-gray-400 mt-2" style={{ fontFamily: 'sans-serif' }}>Words and recordings sync live through the cloud. These are just a downloadable snapshot for your own records.</p>
                             </div>
                             )}
                             <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
