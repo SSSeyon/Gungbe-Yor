@@ -1,4 +1,4 @@
-const CACHE_NAME = 'little-linguist-v13';
+const CACHE_NAME = 'little-linguist-v14';
 
 // Local app files to pre-cache on install.
 const LOCAL_ASSETS = [
